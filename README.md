@@ -11,6 +11,20 @@ LOYA Note is a local desktop app that combines rich notes, a command library, ta
 
 ---
 
+## 📥 Installation
+- Make sure you have python 3 installed first in your system
+### **Option 1: IF Linux**
+```bash
+python3 RunNote.py
+```
+### **Option 2: IF Windows**
+```bash
+python RunNote.py
+```
+- Creates a virtual environment, installs dependencies from `Requirements.json`, and launches the app.
+
+---
+
 ## 🌟 Features
 
 ### 💬 **LOYA (Terminal)**
@@ -69,46 +83,14 @@ LOYA Note is a local desktop app that combines rich notes, a command library, ta
 
 ---
 
-## 📥 Installation
-
-### **Option 1: Quick Start (Recommended)**
-```bash
-python RunNote.py
-```
-- Creates a virtual environment, installs dependencies from `Requirements.json`, and launches the app.
-
-### **Option 2: Manual Setup**
-```bash
-python -m venv .venv
-# Windows
-.\.venv\Scripts\activate
-# macOS/Linux
-source .venv/bin/activate
-
-# Install dependencies from Requirements.json
-pip install PyQt6==6.10.1 PyQt6-Qt6==6.10.1 PyQt6-sip==13.10.2 openpyxl==3.1.5 cryptography==42.0.5
-
-python LOYA_Note.py
-```
-
 ### **Dependencies**
 - Python `>=3.10`
 - PyQt6, PyQt6-Qt6, PyQt6-sip
 - openpyxl
 - cryptography (required for database encryption)
 
-### **Verify Installation**
-```bash
-python LOYA_Note.py
-```
-
 ---
 
-## 🚀 Quick Start
-
-```bash
-python RunNote.py
-```
 Once launched, try:
 - `help` for LOYA command help
 - `open notes` to jump to Notes
