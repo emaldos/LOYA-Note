@@ -8,10 +8,11 @@
 **A Local Knowledge Base + Terminal Assistant for Notes, Commands, and Targets** 🐍✨
 
 LOYA Note is a local desktop app that combines rich notes, a command library, target-driven workflows, and a terminal-style assistant (LOYA) in one place.
-Our main goal in this program is to upgrade your notes and commands from static to dynamic.
-For example, instead of writing ping 192.168.1.1, you can turn it into ping {IP}—and {IP} will automatically be replaced with the target data you selected for testing.
-It also solves the problem of having to search back through your old notes, and it helps with several other challenges too—so enjoy exploring the program.
-LOYA Tools is built to take you from basic attacks to creating your own attack language. It’s not just a tool—it’s your new language to speak.
+
+  Our main goal in this program is to upgrade your notes and commands from static to dynamic.
+  For example, instead of writing ping 192.168.1.1, you can turn it into ping {IP} and {IP} will automatically be replaced with the target data you selected for testing.
+  It also solves the problem of having to search back through your old notes, and it helps with several other challenges too so enjoy exploring the program.
+  LOYA Tools is built to take you from basic attacks to creating your own attack language. It’s not just a tool it’s your new language to speak.
 
 ---
 
