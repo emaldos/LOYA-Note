@@ -174,4 +174,4 @@ Commands are case-insensitive. Use `help` or `help <command>` to see details and
 ## 🔗 Links
 - 🏠 **GitHub Repository**: https://github.com/emaldos/LOYA-Note
 - 🐛 **Issues**: https://github.com/emaldos/LOYA-Note/issues
-- 📄 **License**: LICENSE
+- 📄 **License**: https://github.com/emaldos/LOYA-Note/blob/main/LICENSE
