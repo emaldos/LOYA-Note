@@ -1,0 +1,14 @@
+{
+  "python": {
+    "requires": ">=3.10"
+  },
+  "pip": {
+    "packages": [
+      { "name": "PyQt6", "version": "==6.10.1" },
+      { "name": "PyQt6-Qt6", "version": "==6.10.1" },
+      { "name": "PyQt6-sip", "version": "==13.10.2" },
+      { "name": "openpyxl", "version": "==3.1.5" },
+      { "name": "cryptography", "version": "==42.0.5" }
+    ]
+  }
+}
