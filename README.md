@@ -1,4 +1,4 @@
-# 🚀 LOYA Note v3.1.0
+# 🚀 LOYA Note v3.2
 
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
