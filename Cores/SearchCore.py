@@ -30,6 +30,28 @@ def _ell(s,n):
     s=_norm(s)
     if not s:return ""
     return (s[:max(0,n-3)]+"...") if len(s)>n else s
+def _sync_combo_tooltips(combo):
+    if combo is None:return
+    try:
+        for i in range(combo.count()):
+            combo.setItemData(i,_norm(combo.itemText(i)),Qt.ItemDataRole.ToolTipRole)
+    except Exception:pass
+    try:combo.setToolTip(_norm(combo.currentText()))
+    except Exception:pass
+def _fit_combo_width(combo,min_w=90,max_w=180,pad=46):
+    if combo is None:return
+    fm=QFontMetrics(combo.font());mx=0
+    try:
+        for i in range(combo.count()):
+            t=_norm(combo.itemText(i))
+            if t:mx=max(mx,fm.horizontalAdvance(t))
+    except Exception:pass
+    cur=_norm(combo.currentText())
+    if cur:mx=max(mx,fm.horizontalAdvance(cur))
+    want=max(int(min_w),min(int(max_w),mx+int(pad)))
+    combo.setFixedWidth(want)
+    combo.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed)
+    _sync_combo_tooltips(combo)
 def _clean_cmd(s):
     raw=html.unescape(str(s or ""))
     low=raw.lower()
@@ -722,7 +744,10 @@ class Widget(QWidget):
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.frame=QFrame(self);self.frame.setObjectName("HomeFrame");root.addWidget(self.frame,1)
         v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
-        top=QHBoxLayout();top.setContentsMargins(14,0,14,0);top.setSpacing(10)
+        self.top_box=QVBoxLayout();self.top_box.setContentsMargins(14,0,14,0);self.top_box.setSpacing(0)
+        self.top_row1=QHBoxLayout();self.top_row1.setSpacing(10)
+        self.top_row2=QHBoxLayout();self.top_row2.setSpacing(10)
+        self.top_box.addLayout(self.top_row1);self.top_box.addLayout(self.top_row2)
         self.btn_style=QToolButton(self.frame);self.btn_style.setObjectName("HomeAddBtn");self.btn_style.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_style.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self.btn_style.setStyleSheet("QToolButton{text-align:left;padding-right:18px} QToolButton::menu-indicator{image:none;width:0;height:0}")
         m=QMenu(self.btn_style)
@@ -734,15 +759,20 @@ class Widget(QWidget):
         self.search=QLineEdit(self.frame);self.search.setObjectName("HomeSearch");self.search.setPlaceholderText("Search commands, groups, tags...");self.search.textChanged.connect(self._on_search)
         self.search.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed);self.search.setMinimumWidth(260)
         self.filter=QComboBox(self.frame);self.filter.setObjectName("HomePerPage");self.filter.addItems(["Keyword","Group","Category","Subcategory","Tag","Command"]);self.filter.currentTextChanged.connect(self._on_filter)
-        self.btn_clear=QToolButton(self.frame);self.btn_clear.setObjectName("HomeAddBtn");self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_clear.setText("Clear");self.btn_clear.clicked.connect(self._clear)
+        self.filter.currentTextChanged.connect(lambda *_:_sync_combo_tooltips(self.filter))
+        self.btn_clear=QToolButton(self.frame);self.btn_clear.setObjectName("HomeAddBtn");self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_clear.setText("Clear Search");self.btn_clear.clicked.connect(self._clear)
         self.btn_clear.setStyleSheet("QToolButton{text-align:center} QToolButton::menu-indicator{image:none;width:0;height:0}")
-        self.btn_mini=QToolButton(self.frame);self.btn_mini.setObjectName("HomeAddBtn");self.btn_mini.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_mini.setText("Mini Mode");self.btn_mini.clicked.connect(self._open_mini)
-        top.addWidget(self.btn_style,0);top.addWidget(self.search,1);top.addWidget(self.filter,0);top.addWidget(self.btn_clear,0);top.addWidget(self.btn_mini,0)
-        v.addLayout(top,0)
-        self.filt_box=QVBoxLayout();self.filt_box.setContentsMargins(14,0,14,0);self.filt_box.setSpacing(0)
+        self.btn_adv=QToolButton(self.frame);self.btn_adv.setObjectName("HomeAddBtn");self.btn_adv.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_adv.clicked.connect(self._toggle_advanced_filters)
+        self._top_compact=None;self._top_narrow=None
+        self._layout_top(True,False)
+        v.addLayout(self.top_box,0)
+        self.filt_box=QVBoxLayout();self.filt_box.setContentsMargins(14,0,14,0);self.filt_box.setSpacing(6)
         self.filt_row1=QHBoxLayout();self.filt_row1.setSpacing(10)
+        self.adv_wrap=QFrame(self.frame);self.adv_wrap.setObjectName("SearchAdvancedWrap");self.adv_wrap.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+        self.adv_box=QVBoxLayout(self.adv_wrap);self.adv_box.setContentsMargins(0,0,0,0);self.adv_box.setSpacing(6)
         self.filt_row2=QHBoxLayout();self.filt_row2.setSpacing(10)
-        self.filt_box.addLayout(self.filt_row1);self.filt_box.addLayout(self.filt_row2)
+        self.filt_row3=QHBoxLayout();self.filt_row3.setSpacing(10)
+        self.filt_box.addLayout(self.filt_row1);self.adv_box.addLayout(self.filt_row2);self.adv_box.addLayout(self.filt_row3);self.filt_box.addWidget(self.adv_wrap,0)
         self.lbl_saved=QLabel("Saved",self.frame)
         self.cmb_saved=QComboBox(self.frame);self.cmb_saved.setObjectName("HomePerPage")
         self.lbl_recent=QLabel("Recent",self.frame)
@@ -759,6 +789,7 @@ class Widget(QWidget):
         self.cmb_sub=QComboBox(self.frame);self.cmb_sub.setObjectName("HomePerPage")
         self.lbl_tag=QLabel("Tag",self.frame)
         self.cmb_tag=QComboBox(self.frame);self.cmb_tag.setObjectName("HomePerPage")
+        self.btn_clear_filters=QToolButton(self.frame);self.btn_clear_filters.setObjectName("HomeAddBtn");self.btn_clear_filters.setText("Clear Filters");self.btn_clear_filters.clicked.connect(self._clear_filters)
         self.btn_save.clicked.connect(self._save_search)
         self.btn_del.clicked.connect(self._delete_search)
         self.cmb_saved.currentIndexChanged.connect(self._on_saved_select)
@@ -768,9 +799,13 @@ class Widget(QWidget):
         self.cmb_cat.currentTextChanged.connect(self._on_cat_filter)
         self.cmb_sub.currentTextChanged.connect(self._on_filter_change)
         self.cmb_tag.currentTextChanged.connect(self._on_filter_change)
+        for combo in (self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag):
+            combo.currentTextChanged.connect(lambda *_,c=combo:_sync_combo_tooltips(c))
         self._filters_compact=None
-        self._filters_visible=True
-        self._layout_filters(False)
+        self._advanced_visible=False
+        self._sync_advanced_button()
+        self._layout_filters(3)
+        self._apply_advanced_visibility()
         v.addLayout(self.filt_box,0)
         self.stack=QStackedWidget(self.frame);self.stack.setObjectName("Stack");self.stack.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding);v.addWidget(self.stack,1)
         self.table_style=Table_Style(self._copy,self._cmd_preview,self.stack)
@@ -786,90 +821,111 @@ class Widget(QWidget):
             it=lay.takeAt(0)
             w=it.widget()
             if w:w.setParent(None)
-    def _set_filters_visible(self,visible):
-        for w in (self.lbl_saved,self.cmb_saved,self.lbl_recent,self.cmb_recent,self.btn_save,self.btn_del,
-                  self.lbl_src,self.cmb_src,self.lbl_group,self.cmb_group,self.lbl_cat,self.cmb_cat,
-                  self.lbl_sub,self.cmb_sub,self.lbl_tag,self.cmb_tag):
-            w.setVisible(bool(visible))
-    def _layout_filters(self,compact):
-        if not getattr(self,"_filters_visible",True):
-            self._clear_layout(self.filt_row1)
-            self._clear_layout(self.filt_row2)
-            self.filt_box.setSpacing(0)
-            self._set_filters_visible(False)
-            self._filters_compact=compact
+    def _set_advanced_visible(self,visible):
+        try:self.adv_wrap.setVisible(bool(visible))
+        except Exception:pass
+    def _apply_advanced_visibility(self):
+        vis=bool(self._advanced_visible)
+        self._set_advanced_visible(vis)
+        try:
+            self.adv_wrap.setMaximumHeight(16777215 if vis else 0)
+            self.adv_wrap.setMinimumHeight(0)
+            self.adv_wrap.setVisible(vis)
+            self.filt_box.setSpacing(6 if vis else 2)
+            self.adv_wrap.updateGeometry();self.filt_row2.invalidate();self.filt_row3.invalidate();self.filt_box.invalidate()
+            self.frame.updateGeometry();self.updateGeometry();self.update()
+        except Exception:pass
+    def _sync_advanced_button(self):
+        try:self.btn_adv.setText("Hide Advanced Filters" if self._advanced_visible else "Show Advanced Filters")
+        except Exception:pass
+    def _layout_top(self,compact,narrow):
+        if getattr(self,"_top_compact",None)==compact and getattr(self,"_top_narrow",None)==narrow:return
+        self._top_compact=compact;self._top_narrow=narrow
+        self._clear_layout(self.top_row1);self._clear_layout(self.top_row2)
+        self.top_box.setSpacing(6 if compact else 0)
+        if narrow:
+            self.top_row1.addWidget(self.btn_style,0)
+            self.top_row1.addWidget(self.search,1)
+            self.top_row2.addWidget(self.filter,0)
+            self.top_row2.addWidget(self.btn_clear,0)
+            self.top_row2.addWidget(self.btn_adv,0)
+            self.top_row2.addStretch(1)
             return
-        if getattr(self,"_filters_compact",None)==compact:return
-        self._filters_compact=compact
+        self.top_row1.addWidget(self.btn_style,0)
+        self.top_row1.addWidget(self.search,1)
+        self.top_row1.addWidget(self.filter,0)
+        self.top_row1.addWidget(self.btn_clear,0)
+        self.top_row1.addWidget(self.btn_adv,0)
+        self.top_row1.addStretch(1)
+    def _layout_filters(self,mode):
+        if getattr(self,"_filters_compact",None)==mode:return
+        self._filters_compact=mode
         self._clear_layout(self.filt_row1)
         self._clear_layout(self.filt_row2)
-        self.filt_box.setSpacing(6 if compact else 0)
-        if compact:
-            self.filt_row1.addWidget(self.lbl_saved,0)
-            self.filt_row1.addWidget(self.cmb_saved,1)
-            self.filt_row1.addWidget(self.lbl_recent,0)
-            self.filt_row1.addWidget(self.cmb_recent,1)
-            self.filt_row1.addWidget(self.btn_save,0)
-            self.filt_row1.addWidget(self.btn_del,0)
-            self.filt_row1.addStretch(1)
-            self.filt_row2.addWidget(self.lbl_src,0)
-            self.filt_row2.addWidget(self.cmb_src,1)
-            self.filt_row2.addWidget(self.lbl_group,0)
-            self.filt_row2.addWidget(self.cmb_group,1)
-            self.filt_row2.addWidget(self.lbl_cat,0)
-            self.filt_row2.addWidget(self.cmb_cat,1)
-            self.filt_row2.addWidget(self.lbl_sub,0)
-            self.filt_row2.addWidget(self.cmb_sub,1)
-            self.filt_row2.addWidget(self.lbl_tag,0)
-            self.filt_row2.addWidget(self.cmb_tag,1)
-            self.filt_row2.addStretch(1)
-            return
+        self._clear_layout(self.filt_row3)
         self.filt_row1.addWidget(self.lbl_saved,0)
         self.filt_row1.addWidget(self.cmb_saved,0)
         self.filt_row1.addWidget(self.lbl_recent,0)
         self.filt_row1.addWidget(self.cmb_recent,0)
         self.filt_row1.addWidget(self.btn_save,0)
         self.filt_row1.addWidget(self.btn_del,0)
-        self.filt_row1.addSpacing(10)
-        self.filt_row1.addWidget(self.lbl_src,0)
-        self.filt_row1.addWidget(self.cmb_src,0)
-        self.filt_row1.addWidget(self.lbl_group,0)
-        self.filt_row1.addWidget(self.cmb_group,0)
-        self.filt_row1.addWidget(self.lbl_cat,0)
-        self.filt_row1.addWidget(self.cmb_cat,0)
-        self.filt_row1.addWidget(self.lbl_sub,0)
-        self.filt_row1.addWidget(self.cmb_sub,0)
-        self.filt_row1.addWidget(self.lbl_tag,0)
-        self.filt_row1.addWidget(self.cmb_tag,0)
         self.filt_row1.addStretch(1)
+        if mode==3:
+            self.filt_row2.addWidget(self.lbl_src,0)
+            self.filt_row2.addWidget(self.cmb_src,0)
+            self.filt_row2.addWidget(self.lbl_group,0)
+            self.filt_row2.addWidget(self.cmb_group,0)
+            self.filt_row2.addWidget(self.lbl_cat,0)
+            self.filt_row2.addWidget(self.cmb_cat,0)
+            self.filt_row2.addStretch(1)
+            self.filt_row3.addWidget(self.lbl_sub,0)
+            self.filt_row3.addWidget(self.cmb_sub,0)
+            self.filt_row3.addWidget(self.lbl_tag,0)
+            self.filt_row3.addWidget(self.cmb_tag,0)
+            self.filt_row3.addWidget(self.btn_clear_filters,0)
+            self.filt_row3.addStretch(1)
+            return
+        self.filt_row2.addWidget(self.lbl_src,0)
+        self.filt_row2.addWidget(self.cmb_src,0)
+        self.filt_row2.addWidget(self.lbl_group,0)
+        self.filt_row2.addWidget(self.cmb_group,0)
+        self.filt_row2.addWidget(self.lbl_cat,0)
+        self.filt_row2.addWidget(self.cmb_cat,0)
+        self.filt_row2.addWidget(self.lbl_sub,0)
+        self.filt_row2.addWidget(self.cmb_sub,0)
+        self.filt_row2.addWidget(self.lbl_tag,0)
+        self.filt_row2.addWidget(self.cmb_tag,0)
+        self.filt_row2.addWidget(self.btn_clear_filters,0)
+        self.filt_row2.addStretch(1)
     def _fit_top(self):
         h=30
-        for w in (self.btn_style,self.search,self.filter,self.btn_clear,self.btn_mini,self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag,self.btn_save,self.btn_del):w.setFixedHeight(h)
+        for w in (self.btn_style,self.search,self.filter,self.btn_clear,self.btn_adv,self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag,self.btn_save,self.btn_del,self.btn_clear_filters):w.setFixedHeight(h)
         for w in (self.lbl_saved,self.lbl_recent,self.lbl_src,self.lbl_group,self.lbl_cat,self.lbl_sub,self.lbl_tag):w.setFixedHeight(h)
         width=self.frame.width() if self.frame.width()>0 else self.width()
-        compact=width<1100
+        compact=True
+        narrow=width<1050
         fm_btn=QFontMetrics(self.btn_style.font())
         bw=max(fm_btn.horizontalAdvance(s+"  ▼") for s in ("Table","Split View"))+60
         if bw<180:bw=180
         self.btn_style.setFixedWidth(bw)
-        fm_cmb=QFontMetrics(self.filter.font());self.filter.setFixedWidth(max(fm_cmb.horizontalAdvance(self.filter.itemText(i)) for i in range(self.filter.count()))+50)
-        fm_clr=QFontMetrics(self.btn_clear.font());self.btn_clear.setFixedWidth(fm_clr.horizontalAdvance("Clear")+28)
-        fm_mini=QFontMetrics(self.btn_mini.font());self.btn_mini.setFixedWidth(fm_mini.horizontalAdvance("Mini Mode")+28)
-        for w in (self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag):
-            w.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
-        self.search.setMinimumWidth(200 if compact else 260)
-        self.cmb_saved.setMinimumWidth(120 if compact else 180)
-        self.cmb_recent.setMinimumWidth(150 if compact else 220)
-        self.cmb_src.setMinimumWidth(90 if compact else 120)
-        self.cmb_group.setMinimumWidth(110 if compact else 150)
-        self.cmb_cat.setMinimumWidth(120 if compact else 150)
-        self.cmb_sub.setMinimumWidth(120 if compact else 150)
-        self.cmb_tag.setMinimumWidth(90 if compact else 120)
+        _fit_combo_width(self.filter,110,150)
+        fm_clr=QFontMetrics(self.btn_clear.font());self.btn_clear.setFixedWidth(fm_clr.horizontalAdvance("Clear Search")+28)
+        fm_adv=QFontMetrics(self.btn_adv.font());self.btn_adv.setFixedWidth(fm_adv.horizontalAdvance(_norm(self.btn_adv.text()) or "Show Advanced Filters")+30)
+        self.search.setMinimumWidth(150 if narrow else 200)
+        _fit_combo_width(self.cmb_saved,110 if narrow else 120,170 if narrow else 210)
+        _fit_combo_width(self.cmb_recent,120 if narrow else 140,220 if narrow else 280)
+        _fit_combo_width(self.cmb_src,85 if narrow else 90,120)
+        _fit_combo_width(self.cmb_group,95 if narrow else 110,150 if narrow else 190)
+        _fit_combo_width(self.cmb_cat,100 if narrow else 120,160 if narrow else 190)
+        _fit_combo_width(self.cmb_sub,100 if narrow else 120,160 if narrow else 190)
+        _fit_combo_width(self.cmb_tag,85 if narrow else 90,130 if narrow else 170)
         fm_act=QFontMetrics(self.btn_save.font())
         pad=34 if compact else 40
         self.btn_save.setFixedWidth(fm_act.horizontalAdvance("Save")+pad)
         self.btn_del.setFixedWidth(fm_act.horizontalAdvance("Delete")+pad)
-        self._layout_filters(compact)
+        self.btn_clear_filters.setFixedWidth(fm_act.horizontalAdvance("Clear Filters")+pad)
+        self._layout_top(True,narrow)
+        self._layout_filters(3 if narrow else 2)
     def resizeEvent(self,e):
         try:super().resizeEvent(e)
         except:pass
@@ -891,6 +947,8 @@ class Widget(QWidget):
                     self.cmb_saved.setCurrentIndex(i)
                     break
         self.cmb_saved.blockSignals(False)
+        _sync_combo_tooltips(self.cmb_saved)
+        self._fit_top()
     def _refresh_recent_combo(self):
         self.cmb_recent.blockSignals(True)
         self.cmb_recent.clear()
@@ -899,6 +957,8 @@ class Widget(QWidget):
             self.cmb_recent.addItem(_recent_entry_label(s))
             self.cmb_recent.setItemData(self.cmb_recent.count()-1,s)
         self.cmb_recent.blockSignals(False)
+        _sync_combo_tooltips(self.cmb_recent)
+        self._fit_top()
     def _clear_saved_selection(self):
         if self.cmb_saved.currentIndex()!=0:
             self.cmb_saved.blockSignals(True)
@@ -925,6 +985,7 @@ class Widget(QWidget):
         for x in items or []:combo.addItem(x)
         self._set_combo_value(combo,keep)
         combo.blockSignals(False)
+        _sync_combo_tooltips(combo)
     def _collect_meta(self):
         groups=set();cats=set();subs={};tags=set()
         for n in (self._notes or []):
@@ -1088,6 +1149,28 @@ class Widget(QWidget):
             _log("[+]",f"Copied: {title}")
         except Exception as e:
             _log("[!]",f"Clipboard error ({e})")
+    def _toggle_advanced_filters(self):
+        self._advanced_visible=not bool(getattr(self,"_advanced_visible",False))
+        self._sync_advanced_button()
+        try:
+            fm_adv=QFontMetrics(self.btn_adv.font())
+            self.btn_adv.setFixedWidth(fm_adv.horizontalAdvance(_norm(self.btn_adv.text()) or "Show Advanced Filters")+30)
+        except Exception:pass
+        self._apply_advanced_visibility()
+    def _clear_filters(self):
+        self._applying_saved=True
+        try:
+            self._set_combo_value(self.cmb_src,"All")
+            self._set_combo_value(self.cmb_group,"All")
+            self._set_combo_value(self.cmb_cat,"All")
+            self._refresh_sub_combo("All")
+            self._set_combo_value(self.cmb_tag,"All")
+            self._clear_saved_selection()
+            self._clear_recent_selection()
+        finally:
+            self._applying_saved=False
+        self._apply_query()
+        self._schedule_recent_save()
     def _open_mini(self):
         try:
             w=self.window()
@@ -1100,12 +1183,6 @@ class Widget(QWidget):
         self._applying_saved=True
         try:
             self.search.blockSignals(True);self.search.setText("");self.search.blockSignals(False)
-            self.filter.setCurrentText("Keyword")
-            self._set_combo_value(self.cmb_src,"All")
-            self._set_combo_value(self.cmb_group,"All")
-            self._set_combo_value(self.cmb_cat,"All")
-            self._refresh_sub_combo("All")
-            self._set_combo_value(self.cmb_tag,"All")
             self._clear_saved_selection()
             self._clear_recent_selection()
         finally:

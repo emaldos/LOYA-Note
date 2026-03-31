@@ -1,4 +1,4 @@
-# LOYA Note v4.0.0
+# LOYA Note v4.0.1
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
@@ -139,7 +139,7 @@ Do not include local runtime folders in the release asset:
 - Code snapshots: `Cores/Update/OldVersions/`
 ## Versioning
 - Visible app version, launcher version, updater version, and README version should stay aligned
-- This build is `4.0.0`
+- This build is `4.0.1`
 ## Links
 - Repository: https://github.com/emaldos/LOYA-Note
 - Issues: https://github.com/emaldos/LOYA-Note/issues

@@ -1939,7 +1939,7 @@ class _BackupPage(QWidget):
         h=self.table.horizontalHeader()
         h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0,QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
@@ -1974,17 +1974,13 @@ class _BackupPage(QWidget):
         try:
             h=self.table.horizontalHeader()
             h.setStretchLastSection(False)
-            h.setSectionResizeMode(0,QHeaderView.ResizeMode.Interactive)
+            h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
             h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
             h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
             h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
             self.table.resizeColumnToContents(1)
             self.table.resizeColumnToContents(2)
             self.table.setColumnWidth(3,56)
-            view_w=max(0,int(self.table.viewport().width()))
-            other=self.table.columnWidth(1)+self.table.columnWidth(2)+self.table.columnWidth(3)+12
-            name_w=max(160,min(360,max(160,view_w-other)))
-            self.table.setColumnWidth(0,name_w)
         except Exception:pass
     def _set_status(self,s):self.status.setText(_norm(s))
     def _load_auto_settings(self):
