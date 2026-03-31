@@ -4,6 +4,7 @@ from datetime import datetime,timezone
 from PyQt6.QtCore import Qt,QTimer,QEvent,QStringListModel,pyqtSignal,QObject
 from PyQt6.QtGui import QTextCursor
 from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QTextEdit,QToolButton,QScrollArea,QMessageBox,QSizePolicy,QComboBox,QCompleter,QGridLayout,QListWidget,QAbstractItemView
+from Cores import common_db as _common_db
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -313,57 +314,14 @@ class _PlaceholderCompleter(QObject):
             return False
         return super().eventFilter(obj,event)
 def _db_path():
-    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
-    return os.path.join(d,"Note_LOYA_V1.db")
-DB_SCHEMA_VERSION=2
+    return _common_db.db_path()
+DB_SCHEMA_VERSION=_common_db.DB_SCHEMA_VERSION
 def _ensure_schema(con):
-    cur=con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,created_at TEXT,updated_at TEXT)")
-    cur.execute("CREATE TABLE IF NOT EXISTS Notes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,content TEXT,created_at TEXT,updated_at TEXT)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_name ON CommandsNotes(note_name)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_category ON CommandsNotes(category)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_sub_category ON CommandsNotes(sub_category)")
-    cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_note_name ON Notes(note_name)")
-    _apply_migrations(con)
-    con.commit()
+    _common_db.ensure_schema(con)
 def _apply_migrations(con):
-    try:cur=con.cursor()
-    except:return
-    try:
-        cur.execute("PRAGMA user_version")
-        row=cur.fetchone()
-        ver=int(row[0]) if row and str(row[0]).isdigit() else 0
-    except:ver=0
-    now=datetime.now(timezone.utc).isoformat()
-    try:cur.execute("CREATE TABLE IF NOT EXISTS SchemaMigrations(version INTEGER PRIMARY KEY,applied_at TEXT)")
-    except:pass
-    if ver<1:
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(1,?)",(now,))
-        except:pass
-        ver=1
-    if ver<2:
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS NotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,content TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_hist_note_id ON NotesHistory(note_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_hist_cmd_id ON CommandsNotesHistory(cmd_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_hist_cmd_id ON CommandsHistory(cmd_id)")
-        except:pass
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(2,?)",(now,))
-        except:pass
-        ver=2
-    try:cur.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
-    except:pass
-    try:con.commit()
-    except:pass
+    _common_db.apply_migrations(con)
 def _table_cols(cur,t):
-    try:cur.execute(f"PRAGMA table_info({t})");return [r[1] for r in cur.fetchall()]
-    except:return []
+    return _common_db.table_cols(cur,t)
 def _insert_cmdn_history(cur,cmd_id,note_name,category,subcat,cmd,tags,desc,action,action_at):
     try:
         cur.execute("INSERT INTO CommandsNotesHistory(cmd_id,note_name,category,sub_category,command,tags,description,action,action_at) VALUES(?,?,?,?,?,?,?,?,?)",(cmd_id,note_name,category,subcat,cmd,tags,desc,action,action_at))

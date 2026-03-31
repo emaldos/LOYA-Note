@@ -117,8 +117,8 @@ _DEFAULT_LIMITS={
     "targets_value":10,
 }
 _ALLOWED_FILTERS={
-    "notes":{"keyword","general","note_name","tags","command_keyword","category","sub_category","description_keyword","command_tittle","command_title","cmd_note_title","command","date_from","date_to","has","missing","limit"},
-    "commands":{"keyword","general","command_tittle","command_title","cmd_note_title","category","sub_category","description_keyword","tags","command_keyword","command","date_from","date_to","has","missing","limit"},
+    "notes":{"keyword","general","note_name","group","tags","command_keyword","category","sub_category","description_keyword","command_tittle","command_title","cmd_note_title","command","date_from","date_to","has","missing","limit"},
+    "commands":{"keyword","general","group","command_tittle","command_title","cmd_note_title","category","sub_category","description_keyword","tags","command_keyword","command","date_from","date_to","has","missing","limit"},
     "targets":{"keyword","general","target_name","target_value","has","missing","limit"},
     "targets_value":{"keyword","general","target_value","has","missing","limit"},
 }
@@ -256,14 +256,41 @@ def _target_values_text(values):
         if kk:parts.append(kk)
         if vv:parts.append(vv)
     return " ".join(parts)
+def _clean_preview_text(text):
+    raw=_norm(text)
+    if not raw:return ""
+    raw=raw.replace("\xa0"," ")
+    if "<" in raw and ">" in raw:
+        raw=re.sub(r"<[^>]+>"," ",raw)
+    raw=re.sub(r"\s+"," ",raw).strip()
+    return raw
+def _preview_snippet(text,limit=120):
+    s=_clean_preview_text(text)
+    if not s:return ""
+    return s if len(s)<=limit else s[:max(0,limit-3)]+"..."
+def _note_preview_line(row):
+    return _preview_snippet(row.get("content",""),130)
+def _command_preview_line(row,target_map=None):
+    parts=[]
+    desc=_preview_snippet(row.get("description",""),100)
+    if desc:parts.append("desc="+desc)
+    cmd_raw=row.get("command","")
+    cmd_adj,missing=_apply_target_warn(cmd_raw,target_map)
+    cmd=_preview_snippet(cmd_adj,100)
+    if cmd:
+        if missing:parts.append("cmd="+cmd+" [missing: "+", ".join(missing)+"]")
+        else:parts.append("cmd="+cmd)
+    return " | ".join(parts)
 def _field_present(row,scope,field):
     f=_low(field)
     if scope=="notes":
         if f=="note_name":return bool(_norm(row.get("note_name","")))
+        if f=="group":return bool(_norm(row.get("group_name","")))
         if f in ("content","command","tags","category","sub_category","description_keyword","command_keyword","command_tittle","command_title","cmd_note_title","keyword","general"):
             return bool(_norm(row.get("content","")))
         if f in ("updated_at","created_at"):return bool(_norm(row.get(f,"")))
     if scope=="commands":
+        if f=="group":return bool(_norm(row.get("group_name","")))
         if f in ("command_tittle","command_title","cmd_note_title"):return bool(_norm(row.get("cmd_note_title","") or row.get("note_name","")))
         if f in ("category","sub_category"):return bool(_norm(row.get(f,"")))
         if f=="description_keyword":return bool(_norm(row.get("description","")))
@@ -297,18 +324,22 @@ def _match_condition(row,scope,cond):
     if not vals:return False
     if scope=="notes":
         if key in ("keyword","general"):
-            blob=" ".join([row.get("note_name",""),row.get("content","")])
+            blob=" ".join([row.get("note_name",""),row.get("group_name",""),row.get("content","")])
             return _match_all(blob,vals,op)
         if key=="note_name":
             return _match_all(row.get("note_name",""),vals,op)
+        if key=="group":
+            return _match_all(row.get("group_name",""),vals,op)
         if key in ("tags","command_keyword","category","sub_category","description_keyword","command_tittle","command_title","cmd_note_title","command"):
             return _match_all(row.get("content",""),vals,op)
         if key=="content":
             return _match_all(row.get("content",""),vals,op)
     if scope=="commands":
         if key in ("keyword","general"):
-            blob=" ".join([row.get("note_name",""),row.get("cmd_note_title",""),row.get("category",""),row.get("sub_category",""),row.get("description",""),row.get("tags",""),row.get("command","")])
+            blob=" ".join([row.get("note_name",""),row.get("group_name",""),row.get("cmd_note_title",""),row.get("category",""),row.get("sub_category",""),row.get("description",""),row.get("tags",""),row.get("command","")])
             return _match_all(blob,vals,op)
+        if key=="group":
+            return _match_all(row.get("group_name",""),vals,op)
         if key in ("command_tittle","command_title","cmd_note_title"):
             title=row.get("cmd_note_title","") or row.get("note_name","")
             return _match_all(title,vals,op)
@@ -361,7 +392,7 @@ def _search_notes(groups,limit=50,offset=0):
             return _result("Notes table not found.",0,0,offset,limit,"notes","system")
         cols=set(_table_cols(con,"Notes"))
         sel=["id"]
-        for c in ("note_name","content","created_at","updated_at"):
+        for c in ("note_name","group_name","content","created_at","updated_at"):
             if c in cols:sel.append(c)
         sql="SELECT "+",".join(sel)+" FROM Notes"
         cur=con.cursor();cur.execute(sql)
@@ -383,10 +414,14 @@ def _search_notes(groups,limit=50,offset=0):
         for i,it in enumerate(chunk,offset+1):
             nid=it.get("id","")
             n=_norm(it.get("note_name","")) or "(no name)"
+            g=_norm(it.get("group_name",""))
             u=_norm(it.get("updated_at","") or it.get("created_at","")).replace("T"," ")[:19]
             tail=f" id={nid}" if str(nid).isdigit() else ""
             if u:tail+=f" updated={u}"
-            lines.append(f"{i}. {n}{tail}")
+            label=f"{g} | {n}" if g else n
+            lines.append(f"{i}. {label}{tail}")
+            preview=_note_preview_line(it)
+            if preview:lines.append(f"   preview: {preview}")
         if total>offset+limit:lines.append(f"... {total-(offset+limit)} more")
         return _result("\n".join(lines),total,len(chunk),offset,limit,"notes")
     finally:
@@ -396,10 +431,22 @@ def _query_commands(con,table):
     if not _has_table(con,table):return []
     cols=set(_table_cols(con,table))
     if not cols:return []
+    note_groups_by_id={};note_groups_by_name={}
+    if table=="Commands" and _has_table(con,"Notes"):
+        ncols=set(_table_cols(con,"Notes"))
+        if {"id","note_name"}.issubset(ncols):
+            sel="id,note_name"+(",group_name" if "group_name" in ncols else "")
+            cur=con.cursor();cur.execute(f"SELECT {sel} FROM Notes")
+            for r in cur.fetchall():
+                grp=_norm(r[2]) if "group_name" in ncols and len(r)>2 else ""
+                try:note_groups_by_id[int(r[0])]=grp
+                except Exception:pass
+                nn=_norm(r[1])
+                if nn:note_groups_by_name[nn.lower()]=grp
     sel=[]
     if "id" in cols:sel.append("id")
     else:sel.append("rowid as id")
-    for c in ("note_name","cmd_note_title","category","sub_category","description","tags","command","created_at","updated_at"):
+    for c in ("note_id","note_name","cmd_note_title","category","sub_category","description","tags","command","created_at","updated_at"):
         if c in cols:sel.append(c)
     sql="SELECT "+",".join(sel)+f" FROM {table}"
     cur=con.cursor();cur.execute(sql)
@@ -412,6 +459,10 @@ def _query_commands(con,table):
             item[key]=r[idx] if idx<len(r) else ""
             idx+=1
         item["source"]=table
+        if table=="Commands":
+            try:nid=int(str(item.get("note_id","")).strip())
+            except Exception:nid=None
+            item["group_name"]=note_groups_by_id.get(nid,"") if nid is not None else note_groups_by_name.get(_low(item.get("note_name","")),"")
         out.append(item)
     return out
 def _search_commands(groups,limit=50,target_map=None,offset=0):
@@ -440,22 +491,23 @@ def _search_commands(groups,limit=50,target_map=None,offset=0):
         for i,it in enumerate(chunk,offset+1):
             title=_norm(it.get("cmd_note_title") or it.get("note_name") or "")
             if not title:title="(no title)"
+            grp=_norm(it.get("group_name",""))
             cat=_norm(it.get("category",""))
             sub=_norm(it.get("sub_category",""))
             tags=_norm(it.get("tags",""))
-            cmd_raw=it.get("command","")
-            cmd_adj,missing=_apply_target_warn(cmd_raw,target_map)
-            cmd=_ell(cmd_adj,70)
             seg=[]
+            if grp:seg.append(f"group={grp}")
             if cat or sub:seg.append(f"{cat}/{sub}".strip("/"))
             cid=_norm(it.get("id",""))
             if cid:seg.append(f"id={cid}")
+            src=_norm(it.get("source",""))
+            if src=="Commands":seg.append("src=linked")
+            elif src=="CommandsNotes":seg.append("src=standalone")
             if tags:seg.append(f"tags={tags}")
-            if cmd:
-                if missing:seg.append(f"cmd={cmd} [missing: {', '.join(missing)}]")
-                else:seg.append(f"cmd={cmd}")
             meta=" | ".join(seg) if seg else ""
             lines.append(f"{i}. {title}" + (f" | {meta}" if meta else ""))
+            preview=_command_preview_line(it,target_map)
+            if preview:lines.append(f"   preview: {preview}")
         if total>offset+limit:lines.append(f"... {total-(offset+limit)} more")
         return _result("\n".join(lines),total,len(chunk),offset,limit,"commands")
     finally:

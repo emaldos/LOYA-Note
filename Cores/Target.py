@@ -4,9 +4,11 @@ from datetime import datetime,timezone
 from PyQt6.QtCore import Qt,QSize,QTimer
 from PyQt6.QtGui import QColor,QIcon,QIntValidator
 from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTableWidget,QTableWidgetItem,QHeaderView,QMessageBox,QComboBox,QTabWidget,QAbstractItemView,QDialog,QApplication,QScrollArea,QGridLayout,QInputDialog,QTextEdit,QPlainTextEdit,QCheckBox
+from Cores.Update import health_check as _health_check
+from Cores import recycle_bin as _recycle_bin
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
-    d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
+    d=_health_check.logs_dir();os.makedirs(d,exist_ok=True)
     lg=logging.getLogger("Target");lg.setLevel(logging.INFO)
     fp=os.path.abspath(os.path.join(d,"Target_log.log"))
     for h in list(lg.handlers):
@@ -23,15 +25,13 @@ def _log(tag,msg):
     try:_LOG.info(f"{tag} {msg}")
     except:pass
 def _data_dir():
-    d=_abs("..","Data");os.makedirs(d,exist_ok=True);return d
+    d=_health_check.data_dir();os.makedirs(d,exist_ok=True);return d
 def _db_path():
-    d=_data_dir()
-    return os.path.join(d,"Note_LOYA_V1.db")
+    return _health_check.db_path()
 def _paths():
-    d=_data_dir()
-    vp=os.path.join(d,"target_values.json")
-    p_new=os.path.join(d,"Targets.json")
-    p_old=os.path.join(d,"Targes.json")
+    vp=_health_check.target_values_path()
+    p_new=_health_check.targets_path()
+    p_old=_health_check.legacy_targets_path()
     tp=p_new if os.path.isfile(p_new) or not os.path.isfile(p_old) else p_old
     return vp,tp
 def _now():return datetime.now(timezone.utc).isoformat()
@@ -49,8 +49,7 @@ _SETTINGS_MTIME=None
 _KEY_RE_STRICT=re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
 _KEY_RE_EXT=re.compile(r"^[A-Za-z_][A-Za-z0-9_\-.:]*$")
 def _settings_path():
-    d=_data_dir()
-    return os.path.join(d,"settings.json")
+    return _health_check.settings_path()
 def _read_settings():
     global _SETTINGS_CACHE,_SETTINGS_MTIME
     p=_settings_path()
@@ -723,10 +722,21 @@ class Store:
         self.targets.append({"id":_sid(name+now),"name":name,"status":"not_used","values":nv,"created":now,"updated":now})
         return (True,"Created") if self.save_targets() else (False,"Save failed")
     def delete_target(self,tid):
+        found=None
+        for t in self.targets:
+            if t.get("id")==tid:found=dict(t);break
+        if not found:return False,"Not found"
+        ok,recycle_id=_recycle_bin.put_entry(_recycle_bin.TYPE_TARGET,_norm(found.get("name","")),{"target":found},source="Targets",entity_key=_norm(found.get("id","")))
+        if not ok:return False,f"Recycle Bin failed: {recycle_id}"
         before=len(self.targets)
         self.targets=[t for t in self.targets if t["id"]!=tid]
-        if len(self.targets)==before:return False,"Not found"
-        return (True,"Deleted") if self.save_targets() else (False,"Save failed")
+        if len(self.targets)==before:
+            _recycle_bin.delete_entry(recycle_id)
+            return False,"Not found"
+        if self.save_targets():return True,"Moved to Recycle Bin"
+        _recycle_bin.delete_entry(recycle_id)
+        self.targets.append(found)
+        return False,"Save failed"
     def set_live_target(self,tid):
         tid=_norm(tid)
         if not tid:return False,"Missing id"
@@ -1410,12 +1420,12 @@ class Widget(QWidget):
         name=_norm(t.get("name",""))
         if not skip_confirm:
             w=self.window() if self.window() else self
-            if QMessageBox.question(w,"Delete",f"Delete target: {name}?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+            if QMessageBox.question(w,"Recycle Bin",f"Move target to Recycle Bin?\n\n{name}",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
         ok,msg=self.store.delete_target(t.get("id"))
         if not ok:
-            QMessageBox.critical(self,"Delete",msg)
+            QMessageBox.critical(self,"Recycle Bin",msg)
             return
-        _log("[+]",f"Deleted target: {name}")
+        _log("[+]",f"Moved target to Recycle Bin: {name}")
         self._render_targets()
     def _on_target_cell(self,row,col):
         t=self._row_target(row)

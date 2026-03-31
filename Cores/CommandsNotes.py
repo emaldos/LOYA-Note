@@ -4,6 +4,9 @@ from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QSize,QTimer,pyqtSignal
 from PyQt6.QtGui import QIcon,QAction,QFontMetrics,QColor
 from PyQt6.QtWidgets import QApplication,QWidget,QVBoxLayout,QHBoxLayout,QToolButton,QLineEdit,QTableWidget,QTableWidgetItem,QDialog,QFrame,QHeaderView,QComboBox,QLabel,QMessageBox,QSizePolicy,QMenu,QTextEdit
+from Cores import common_db as _common_db
+from Cores import note_refs as _note_refs
+from Cores import recycle_bin as _recycle_bin
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -23,64 +26,14 @@ def _log(tag,msg):
     try:_LOG.info(f"{tag} {msg}")
     except:pass
 def _db_path():
-    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
-    return os.path.join(d,"Note_LOYA_V1.db")
-DB_SCHEMA_VERSION=2
+    return _common_db.db_path()
+DB_SCHEMA_VERSION=_common_db.DB_SCHEMA_VERSION
 def _table_cols(cur,t):
-    try:cur.execute(f"PRAGMA table_info({t})");return [r[1] for r in cur.fetchall()]
-    except:return []
+    return _common_db.table_cols(cur,t)
 def _ensure_schema(con):
-    try:
-        con.execute("CREATE TABLE IF NOT EXISTS CommandsNotes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,created_at TEXT,updated_at TEXT)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_note_name ON CommandsNotes(note_name)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_category ON CommandsNotes(category)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_sub_category ON CommandsNotes(sub_category)")
-    except:pass
-    try:
-        con.execute("CREATE TABLE IF NOT EXISTS Commands(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,created_at TEXT,updated_at TEXT)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_id ON Commands(note_id)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_name ON Commands(note_name)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_category ON Commands(category)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_sub_category ON Commands(sub_category)")
-    except:pass
-    _apply_migrations(con)
-    try:con.commit()
-    except:pass
+    _common_db.ensure_schema(con)
 def _apply_migrations(con):
-    try:cur=con.cursor()
-    except:return
-    try:
-        cur.execute("PRAGMA user_version")
-        row=cur.fetchone()
-        ver=int(row[0]) if row and str(row[0]).isdigit() else 0
-    except:ver=0
-    now=datetime.now(timezone.utc).isoformat()
-    try:cur.execute("CREATE TABLE IF NOT EXISTS SchemaMigrations(version INTEGER PRIMARY KEY,applied_at TEXT)")
-    except:pass
-    if ver<1:
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(1,?)",(now,))
-        except:pass
-        ver=1
-    if ver<2:
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS NotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,content TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_hist_note_id ON NotesHistory(note_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_hist_cmd_id ON CommandsNotesHistory(cmd_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_hist_cmd_id ON CommandsHistory(cmd_id)")
-        except:pass
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(2,?)",(now,))
-        except:pass
-        ver=2
-    try:cur.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
-    except:pass
-    try:con.commit()
-    except:pass
+    _common_db.apply_migrations(con)
 def _norm(s):return (str(s) if s is not None else "").strip()
 def _ell(s,n):
     s=_norm(s)
@@ -161,6 +114,17 @@ def _load_cmds():
         con=sqlite3.connect(p);_ensure_schema(con)
         cur=con.cursor()
         out=[]
+        note_groups_by_id={};note_groups_by_name={}
+        notes_cols=set(_table_cols(cur,"Notes"))
+        if {"id","note_name"}.issubset(notes_cols):
+            sel="id,note_name"+(",group_name" if "group_name" in notes_cols else "")
+            cur.execute(f"SELECT {sel} FROM Notes")
+            for r in cur.fetchall():
+                grp=_norm(r[2]) if "group_name" in notes_cols and len(r)>2 else ""
+                try:note_groups_by_id[int(r[0])]=grp
+                except Exception:pass
+                nn=_norm(r[1])
+                if nn:note_groups_by_name[nn.lower()]=grp
         cn=set(_table_cols(cur,"CommandsNotes"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cn):
             has_desc="description" in cn
@@ -168,7 +132,7 @@ def _load_cmds():
             cur.execute(f"SELECT {sel} FROM CommandsNotes ORDER BY id DESC")
             for r in cur.fetchall():
                 rid=r[0];nn=r[1];c=r[2];sc=r[3];cmd=r[4];tags=r[5];desc=(r[6] if has_desc else "")
-                out.append({"id":int(rid),"src":"CommandsNotes","locked":False,"note_id":None,"note_name":_norm(nn) or "Unlinked","title":_norm(nn) or "Unlinked","category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
+                out.append({"id":int(rid),"src":"CommandsNotes","locked":False,"note_id":None,"note_name":_norm(nn) or "Unlinked","group_name":"","title":_norm(nn) or "Unlinked","category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
         cc=set(_table_cols(cur,"Commands"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cc):
             has_desc="description" in cc
@@ -189,7 +153,9 @@ def _load_cmds():
                 ttl=(r[i] if has_title else "")
                 nn=_norm(nn) or "Unlinked"
                 ttl=_norm(ttl) or nn
-                out.append({"id":int(rid),"src":"Commands","locked":True,"note_id":(int(note_id) if str(note_id).isdigit() else None),"note_name":nn,"title":ttl,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
+                nid=(int(note_id) if str(note_id).isdigit() else None)
+                grp=note_groups_by_id.get(nid,"") if nid is not None else note_groups_by_name.get(nn.lower(),"")
+                out.append({"id":int(rid),"src":"Commands","locked":True,"note_id":nid,"note_name":nn,"group_name":grp,"title":ttl,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
         con.close()
         _log("[+]",f"Loaded commands: {len(out)} from {os.path.basename(p)}")
         return p,out
@@ -211,9 +177,11 @@ def _delete_cmd(item):
             key_col="id" if "id" in cols else "rowid"
             now=datetime.now(timezone.utc).isoformat()
             try:
-                cur.execute(f"SELECT {key_col},note_name,category,sub_category,command,tags,description FROM CommandsNotes WHERE {key_col}=?",(int(nid),))
+                cur.execute(f"SELECT {key_col},note_name,category,sub_category,command,tags,description,created_at,updated_at FROM CommandsNotes WHERE {key_col}=?",(int(nid),))
                 r=cur.fetchone()
-                if r:_insert_cmdn_history(cur,r[0],r[1],r[2],r[3],r[4],r[5],r[6],"delete",now)
+                if r:
+                    _insert_cmdn_history(cur,r[0],r[1],r[2],r[3],r[4],r[5],r[6],"delete",now)
+                    _recycle_bin.put_entry_cur(cur,_recycle_bin.TYPE_COMMAND,_norm(r[1]) or "Unlinked",{"command":{"id":r[0],"note_name":r[1],"category":r[2],"sub_category":r[3],"command":r[4],"tags":r[5],"description":r[6],"created_at":r[7] if len(r)>7 else "","updated_at":r[8] if len(r)>8 else ""}},source="CommandsNotes",entity_key=str(r[0]),deleted_at=now,expires_at=_recycle_bin.expires_text())
             except:pass
             cur.execute(f"DELETE FROM CommandsNotes WHERE {key_col}=?",(int(nid),))
             con.commit()
@@ -366,20 +334,9 @@ class Widget(QWidget):
     def _linked_note_name(self,n):
         if not isinstance(n,dict):return ""
         dbp=n.get("db") or self._dbp
-        nid=n.get("note_id")
         fallback=_norm(n.get("note_name","")) or "Unlinked"
-        if not dbp or nid is None:return fallback
-        try:
-            with sqlite3.connect(dbp,timeout=5) as con:
-                cur=con.cursor()
-                cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Notes'")
-                if not cur.fetchone():return fallback
-                cols=set(_table_cols(cur,"Notes"))
-                if "note_name" not in cols:return fallback
-                cur.execute("SELECT note_name FROM Notes WHERE id=?",(int(nid),))
-                r=cur.fetchone()
-                return _norm(r[0]) if r and _norm(r[0]) else fallback
-        except:return fallback
+        ref=_note_refs.resolve_note_ref(dbp,note_id=n.get("note_id"),note_name=n.get("note_name",""))
+        return (_note_refs.note_ref_name(ref) if ref else "") or fallback
     def _set_row(self,r,n):
         self._set_item(r,0,_ell(n.get("title","") or n.get("note_name",""),60),n.get("title","") or n.get("note_name",""),Qt.AlignmentFlag.AlignCenter,True)
         self._set_item(r,1,_ell(n.get("category",""),40),n.get("category",""),Qt.AlignmentFlag.AlignCenter)
@@ -428,6 +385,11 @@ class Widget(QWidget):
         if not isinstance(n,dict):return False
         page=self._nav_notes()
         if not page:return False
+        if hasattr(page,"open_note_ref"):
+            try:
+                if page.open_note_ref(note_id=n.get("note_id"),note_name=n.get("note_name","")):return True
+            except Exception:
+                pass
         nid=n.get("note_id",None)
         if nid is not None:
             try:
@@ -457,6 +419,7 @@ class Widget(QWidget):
         src="Linked" if n.get("src")=="Commands" else "Not Linked"
         items=[
             ("Copy Note Name",n.get("note_name","")),
+            ("Copy Group",n.get("group_name","")),
             ("Copy Title",n.get("title","") or n.get("note_name","")),
             ("Copy Category",n.get("category","")),
             ("Copy Sub Category",n.get("sub","")),
@@ -499,6 +462,7 @@ class Widget(QWidget):
         if not isinstance(n,dict):return ""
         title=_norm(n.get("title") or n.get("note_name",""))
         note_name=_norm(n.get("note_name",""))
+        group_name=_norm(n.get("group_name",""))
         cat=_norm(n.get("category",""))
         sub=_norm(n.get("sub",""))
         tags=_norm(n.get("tags",""))
@@ -506,6 +470,7 @@ class Widget(QWidget):
         src="Linked" if n.get("src")=="Commands" else "Not Linked"
         cmd=n.get("command","") or ""
         lines=[f"Note Title: {title}"]
+        if group_name:lines.append(f"Group: {group_name}")
         if note_name and note_name!=title:lines.append(f"Note Name: {note_name}")
         lines.append(f"Category: {cat}")
         lines.append(f"Sub Category: {sub}")
@@ -597,10 +562,10 @@ class Widget(QWidget):
                 QMessageBox.information(self,"Linked",f"You can't delete this here.\n\nThis command belongs to Note:\n{nn}\n\nDelete it from the original Note, or delete the Note itself.")
                 return
             w=self.window() if self.window() else self
-            if QMessageBox.question(w,"Delete","Delete this command?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+            if QMessageBox.question(w,"Recycle Bin","Move this command to Recycle Bin?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
             ok=_delete_cmd(n)
-            if ok:_log("[+]",f"Deleted command");self.reload()
-            else:_log("[-]",f"Delete failed");QMessageBox.critical(w,"Error","Failed to delete command.")
+            if ok:_log("[+]",f"Moved command to Recycle Bin");self.reload()
+            else:_log("[-]",f"Recycle Bin move failed");QMessageBox.critical(w,"Error","Failed to move command to Recycle Bin.")
     def _on_cell_double(self,row,col):
         n=self._row_item(row)
         if not n:return

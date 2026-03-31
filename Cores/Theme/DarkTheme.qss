@@ -5,8 +5,8 @@ QFrame#ContentFrame{background:#1b1b1b;border-radius:18px}
 QFrame#SideBar{background:#161616;border-radius:18px}
 QStackedWidget#Stack{background:transparent}
 QWidget#Page{background:transparent}
-QLabel#PageTitle{font-size:22px;font-weight:800;color:#f2f2f2}
-QLabel#PageSubTitle{font-size:13px;color:#b8b8b8}
+QLabel#PageTitle{font-size:22px;font-weight:800;color:#f2f2f2;margin:0;padding:0}
+QLabel#PageSubTitle{font-size:13px;color:#b8b8b8;margin:0;padding:0}
 QLabel#SectionTitle{font-size:16px;font-weight:900;color:#f2f2f2}
 QLineEdit#AIPathInput{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:12px;padding:8px 10px;selection-background-color:#3a3a3a;min-height:30px}
 QLineEdit#AIPathInput:focus{border:1px solid #3a3a3a;background:#202020}
@@ -153,6 +153,10 @@ QFrame#NoteFrame{background:transparent;border-radius:18px}
 QFrame#NoteBar{background:transparent}
 QLineEdit#NoteName{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:10px;padding:4px 10px;selection-background-color:#3a3a3a;min-height:28px}
 QLineEdit#NoteName:focus{border:1px solid #3a3a3a;background:#202020}
+QComboBox#NoteGroup{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:10px;padding:4px 10px;padding-right:30px;selection-background-color:#3a3a3a;min-height:28px}
+QComboBox#NoteGroup:hover{background:#262626}
+QComboBox#NoteGroup:focus,QComboBox#NoteGroup:on{border:1px solid #3a3a3a;background:#202020}
+QComboBox#NoteGroup::drop-down{subcontrol-origin:padding;subcontrol-position:top right;width:24px;border:0;background:transparent}
 QToolButton#NoteAddCmd,QToolButton#NoteAddLink,QToolButton#NoteCreateBtn,QToolButton#NoteClear,QToolButton#NoteSave{background:#232323;border:1px solid #343434;border-radius:10px;padding:4px 12px;font-weight:900;min-height:28px;min-width:92px;max-width:160px;text-align:center}
 QToolButton#NoteAddCmd:hover,QToolButton#NoteAddLink:hover,QToolButton#NoteCreateBtn:hover,QToolButton#NoteClear:hover,QToolButton#NoteSave:hover{background:#2b2b2b}
 QToolButton#NoteAddCmd:pressed,QToolButton#NoteAddLink:pressed,QToolButton#NoteCreateBtn:pressed,QToolButton#NoteClear:pressed,QToolButton#NoteSave:pressed{background:#303030}
@@ -191,9 +195,11 @@ QFrame#NoteNavLeft{background:#171717;border:1px solid #2b2b2b;border-radius:18p
 QFrame#NoteNavSep{background:#2e7bff;border:0;margin:0}
 QScrollArea#NoteNavScroll{background:transparent;border:0}
 QFrame#NoteNavList{background:transparent}
-QToolButton#NoteNavBtn{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:10px;padding:6px 10px;text-align:left}
-QToolButton#NoteNavBtn:hover{background:#262626}
-QToolButton#NoteNavBtn:checked{background:#2b2b2b;border:1px solid #3a3a3a}
+QToolButton#NoteNavGroupBtn{background:transparent;border:0;border-radius:10px;padding:4px 8px;font-weight:900;text-align:left;color:#f2f2f2}
+QToolButton#NoteNavGroupBtn:hover{background:#202020}
+QToolButton#NoteNavChildBtn{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:10px;padding:6px 14px;text-align:left}
+QToolButton#NoteNavChildBtn:hover{background:#262626}
+QToolButton#NoteNavChildBtn:checked{background:#2b2b2b;border:1px solid #3a3a3a}
 QLabel#NoteNavTitle{color:#f2f2f2;font-weight:900;font-size:16px}
 QFrame#NoteNavDisplayFrame{background:#171717;border:1px solid #2b2b2b;border-radius:18px}
 QTextEdit#NoteNavDisplay,QTextBrowser#NoteNavDisplay{background:transparent;border:0;padding:6px 4px;color:#e6e6e6}

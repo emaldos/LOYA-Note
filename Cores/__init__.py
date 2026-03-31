@@ -8,4 +8,6 @@ __all__ = [
     "SearchCore",
     "Settings",
     "Target",
+    "common_db",
+    "note_refs",
 ]

@@ -3,7 +3,10 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime,timezone
 from PyQt6.QtCore import Qt,QSize,QTimer,pyqtSignal,QRect,QEvent,QObject,QStringListModel
 from PyQt6.QtGui import QIcon,QKeySequence,QTextCharFormat,QTextListFormat,QTextTableFormat,QTextCursor,QShortcut,QAction,QColor,QTextBlockFormat,QImage,QTextImageFormat,QTextFormat,QTextLength,QTextDocumentFragment,QSyntaxHighlighter,QDrag,QFontMetrics
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTextEdit,QMessageBox,QDialog,QGridLayout,QSpinBox,QTabWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QMenu,QComboBox,QFileDialog,QInputDialog,QSplitter,QCompleter,QListWidget,QApplication,QScrollArea,QButtonGroup,QSizePolicy,QTextBrowser
+from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTextEdit,QMessageBox,QDialog,QGridLayout,QSpinBox,QTabWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QMenu,QComboBox,QFileDialog,QInputDialog,QSplitter,QCompleter,QListWidget,QListWidgetItem,QApplication,QScrollArea,QButtonGroup,QSizePolicy,QTextBrowser
+from Cores import common_db as _common_db
+from Cores import note_refs as _note_refs
+from Cores import recycle_bin as _recycle_bin
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -27,6 +30,7 @@ _CODE_COLOR="#6bdcff"
 _CODE_FONT="Consolas"
 _NOTE_REF_COLOR_DEFAULT="#b197fc"
 _NOTE_LINK_COLOR_DEFAULT="#b197fc"
+_NAV_UNGROUPED_KEY="__ungrouped__"
 _NOTE_REF_RX=re.compile(r"-Notename-([^\r\n-]+)-",re.I)
 _NOTE_LINK_ANCHOR="notelink:"
 _CMD_ANCHOR_EDIT="cmdedit:"
@@ -38,72 +42,14 @@ except Exception:
     except Exception:_USER_PROP=1000
 _CMD_TABLE_PROP=_USER_PROP+41
 def _db_path():
-    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
-    return os.path.join(d,"Note_LOYA_V1.db")
-DB_SCHEMA_VERSION=2
+    return _common_db.db_path()
+DB_SCHEMA_VERSION=_common_db.DB_SCHEMA_VERSION
 def _ensure_schema(con):
-    cur=con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS Notes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,content TEXT,created_at TEXT,updated_at TEXT)")
-    try:cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_notes_name ON Notes(note_name)")
-    except:
-        try:
-            cur.execute("SELECT note_name,MAX(id) FROM Notes GROUP BY note_name HAVING COUNT(*)>1")
-            for nm,keep in cur.fetchall():cur.execute("DELETE FROM Notes WHERE note_name=? AND id<>?",(nm,keep))
-            con.commit()
-            cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_notes_name ON Notes(note_name)")
-        except:pass
-    _apply_migrations(con)
-    con.commit()
+    _common_db.ensure_schema(con)
 def _ensure_cmd_schema(con):
-    cur=con.cursor()
-    cur.execute("CREATE TABLE IF NOT EXISTS Commands(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,created_at TEXT,updated_at TEXT)")
-    try:
-        cols=set(_table_cols(cur,"Commands"))
-        if "note_id" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN note_id INTEGER")
-        if "cmd_note_title" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN cmd_note_title TEXT")
-        if "description" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN description TEXT")
-    except:pass
-    try:cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_id ON Commands(note_id)")
-    except:pass
-    try:cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_name ON Commands(note_name)")
-    except:pass
-    _apply_migrations(con)
-    con.commit()
+    _common_db.ensure_schema(con)
 def _apply_migrations(con):
-    try:cur=con.cursor()
-    except:return
-    try:
-        cur.execute("PRAGMA user_version")
-        row=cur.fetchone()
-        ver=int(row[0]) if row and str(row[0]).isdigit() else 0
-    except:ver=0
-    now=datetime.now(timezone.utc).isoformat()
-    try:cur.execute("CREATE TABLE IF NOT EXISTS SchemaMigrations(version INTEGER PRIMARY KEY,applied_at TEXT)")
-    except:pass
-    if ver<1:
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(1,?)",(now,))
-        except:pass
-        ver=1
-    if ver<2:
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS NotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,content TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_hist_note_id ON NotesHistory(note_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_hist_cmd_id ON CommandsNotesHistory(cmd_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_hist_cmd_id ON CommandsHistory(cmd_id)")
-        except:pass
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(2,?)",(now,))
-        except:pass
-        ver=2
-    try:cur.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
-    except:pass
-    try:con.commit()
-    except:pass
+    _common_db.apply_migrations(con)
 def _parse_cmd_blocks(text):
     t=text or ""
     out=[]
@@ -142,6 +88,10 @@ def _sync_commands(con,note_id,note_name,note_text,now):
     return len(cmds)
 def _norm(s):return " ".join((s or "").strip().split())
 def _kci(s):return _norm(s).lower()
+def _group_label(s):return _norm(s) or "Ungrouped"
+def _group_sort_key(s):
+    g=_norm(s)
+    return (1 if not g else 0,_group_label(g).lower())
 def _targets_values_path():
     d=_abs("..","Data");os.makedirs(d,exist_ok=True)
     return os.path.join(d,"target_values.json")
@@ -226,11 +176,21 @@ def _load_notes_meta():
     p=_notes_meta_path()
     d=_read_json(p)
     if not isinstance(d,dict):d={}
-    pinned=_dedupe_ci(d.get("pinned",[]))
-    recent=_dedupe_ci(d.get("recent",[]))
-    return {"pinned":pinned,"recent":recent}
-def _save_notes_meta(pinned,recent):
-    data={"pinned":_dedupe_ci(pinned),"recent":_dedupe_ci(recent)}
+    pinned=_note_refs.dedupe_note_refs(d.get("pinned",[]))
+    recent=_note_refs.dedupe_note_refs(d.get("recent",[]))
+    groups=_dedupe_ci(d.get("groups",[]))
+    nav_collapsed_groups=_dedupe_ci(d.get("nav_collapsed_groups",[]))
+    return {"pinned":pinned,"recent":recent,"groups":groups,"nav_collapsed_groups":nav_collapsed_groups}
+def _save_notes_meta(pinned,recent,groups=None,nav_collapsed_groups=None):
+    if groups is None:
+        cur=_read_json(_notes_meta_path())
+        if not isinstance(cur,dict):cur={}
+        groups=_dedupe_ci(cur.get("groups",[]))
+    if nav_collapsed_groups is None:
+        cur=_read_json(_notes_meta_path())
+        if not isinstance(cur,dict):cur={}
+        nav_collapsed_groups=_dedupe_ci(cur.get("nav_collapsed_groups",[]))
+    data={"pinned":_note_refs.dedupe_note_refs(pinned),"recent":_note_refs.dedupe_note_refs(recent),"groups":_dedupe_ci(groups),"nav_collapsed_groups":_dedupe_ci(nav_collapsed_groups)}
     return _write_json(_notes_meta_path(),data)
 def _clamp_u16(n):
     try:n=int(n)
@@ -472,7 +432,13 @@ def _decode_cmd_data(token):
     except Exception:
         return {}
 def _encode_note_link_data(note,color):
-    d={"note":_norm(note),"color":_norm_hex_color(color)}
+    ref=_note_refs.normalize_note_ref(note)
+    d={
+        "note_id":ref.get("note_id"),
+        "note_name":ref.get("note_name",""),
+        "note":ref.get("note_name",""),
+        "color":_norm_hex_color(color),
+    }
     raw=json.dumps(d,ensure_ascii=False)
     b=base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
     return b.rstrip("=")
@@ -483,7 +449,10 @@ def _decode_note_link_data(token):
     try:
         raw=base64.urlsafe_b64decode(t+pad).decode("utf-8")
         d=json.loads(raw)
-        return d if isinstance(d,dict) else {}
+        if not isinstance(d,dict):
+            return {}
+        ref=_note_refs.normalize_note_ref(d)
+        return {"note_id":ref.get("note_id"),"note_name":ref.get("note_name",""),"note":ref.get("note_name",""),"color":_norm_hex_color(d.get("color",""))}
     except Exception:
         return {}
 def _parse_cmd_meta(meta):
@@ -500,8 +469,7 @@ def _parse_cmd_meta(meta):
         elif k=="tags":d["tags"]=v
     return d
 def _table_cols(cur,t):
-    try:cur.execute(f"PRAGMA table_info({t})");return [r[1] for r in cur.fetchall()]
-    except:return []
+    return _common_db.table_cols(cur,t)
 def _cmd_meta(dbp):
     cats=set();subm={}
     try:
@@ -551,8 +519,53 @@ class DropInput(QWidget):
             a=QAction(empty_label,self);a.setEnabled(False);self.m.addAction(a);return
         for s in items:
             a=QAction(s,self);a.triggered.connect(lambda chk=False,v=s:self.setText(v));self.m.addAction(a)
-def _sig(name,htmls):
-    s=(name or "").strip()+"\n"+(htmls or "")
+class SelectInput(QComboBox):
+    textChanged=pyqtSignal(str)
+    def __init__(self,obj,ph="",parent=None):
+        super().__init__(parent)
+        self._ph=ph or ""
+        self.setObjectName(obj)
+        self.setEditable(True)
+        self.setInsertPolicy(QComboBox.InsertPolicy.NoInsert)
+        self.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
+        self.setMinimumContentsLength(14)
+        self.setMaxVisibleItems(18)
+        self.setMinimumHeight(30)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+        le=self.lineEdit()
+        if le is not None:
+            le.setPlaceholderText(self._ph)
+            le.textChanged.connect(self.textChanged.emit)
+    def text(self):return self.currentText()
+    def setText(self,t):self.setEditText(t or "")
+    def clear(self):self.setEditText("")
+    def setMaxLength(self,n):
+        le=self.lineEdit()
+        if le is not None:le.setMaxLength(int(n))
+    def setPlaceholderText(self,t):
+        self._ph=t or ""
+        le=self.lineEdit()
+        if le is not None:le.setPlaceholderText(self._ph)
+    def set_items(self,items,empty_label=""):
+        cur=_norm(self.text())
+        rows=[];seen=set()
+        for it in (items or []):
+            s=_norm(it)
+            if not s or _kci(s) in seen:continue
+            seen.add(_kci(s));rows.append(s)
+        rows.sort(key=lambda s:s.lower())
+        le=self.lineEdit()
+        self.blockSignals(True)
+        if le is not None:le.blockSignals(True)
+        super().clear()
+        for s in rows:self.addItem(s)
+        self.setEditText(cur)
+        if le is not None:
+            le.setPlaceholderText(self._ph or empty_label or "")
+            le.blockSignals(False)
+        self.blockSignals(False)
+def _sig(name,htmls,group_name=""):
+    s=(name or "").strip()+"\n"+_norm(group_name)+"\n"+(htmls or "")
     return hashlib.sha256(s.encode("utf-8","ignore")).hexdigest()
 def _fmt_note_time(t):
     raw=_norm(t)
@@ -571,9 +584,9 @@ def _fmt_note_time(t):
     try:dt=dt.astimezone()
     except Exception:pass
     return dt.strftime("%H:%M %d/%m/%Y")
-def _insert_note_history(cur,note_id,note_name,content,action,action_at):
+def _insert_note_history(cur,note_id,note_name,group_name,content,action,action_at):
     try:
-        cur.execute("INSERT INTO NotesHistory(note_id,note_name,content,action,action_at) VALUES(?,?,?,?,?)",(note_id,note_name,content,action,action_at))
+        cur.execute("INSERT INTO NotesHistory(note_id,note_name,group_name,content,action,action_at) VALUES(?,?,?,?,?,?)",(note_id,note_name,group_name,content,action,action_at))
     except:pass
 def _insert_cmd_history(cur,cmd_id,note_id,note_name,cmd_note_title,category,sub_category,description,tags,command,action,action_at):
     try:
@@ -584,10 +597,22 @@ def _load_notes(dbp):
         with sqlite3.connect(dbp,timeout=5) as con:
             _ensure_schema(con)
             cur=con.cursor()
-            cur.execute("SELECT id,note_name,content,created_at,updated_at FROM Notes ORDER BY updated_at DESC")
+            cols=set(_table_cols(cur,"Notes"))
+            sel=["id","note_name"]
+            if "group_name" in cols:sel.append("group_name")
+            sel+=["content","created_at","updated_at"]
+            cur.execute("SELECT "+",".join(sel)+" FROM Notes ORDER BY updated_at DESC")
             rows=cur.fetchall()
         out=[]
-        for r in rows:out.append({"id":r[0],"note_name":(r[1] or "").strip(),"content":r[2] or "","created_at":r[3] or "","updated_at":r[4] or ""})
+        for r in rows:
+            i=0
+            rid=r[i];i+=1
+            note_name=r[i];i+=1
+            group_name=(r[i] if "group_name" in sel else "");i+=1 if "group_name" in sel else 0
+            content=r[i] if i<len(r) else "";i+=1
+            created_at=r[i] if i<len(r) else "";i+=1
+            updated_at=r[i] if i<len(r) else ""
+            out.append({"id":rid,"note_name":(note_name or "").strip(),"group_name":_norm(group_name),"content":content or "","created_at":created_at or "","updated_at":updated_at or ""})
         return out
     except Exception as e:
         _log("[!]",f"Load notes failed ({e})")
@@ -597,16 +622,25 @@ def _delete_note(dbp,name):
         with sqlite3.connect(dbp,timeout=5) as con:
             _ensure_schema(con);_ensure_cmd_schema(con)
             cur=con.cursor()
-            cur.execute("SELECT id,note_name,content FROM Notes WHERE note_name=?",(name,))
+            cols=set(_table_cols(cur,"Notes"))
+            sel="id,note_name"+(",group_name" if "group_name" in cols else "")+",content,created_at,updated_at"
+            cur.execute(f"SELECT {sel} FROM Notes WHERE note_name=?",(name,))
             r=cur.fetchone()
             if not r:return False
             nid=int(r[0]);now=datetime.now(timezone.utc).isoformat()
-            _insert_note_history(cur,nid,r[1] or "",r[2] or "","delete",now)
+            group_name=(r[2] if "group_name" in cols else "")
+            content=(r[3] if "group_name" in cols else r[2])
+            created_at=(r[4] if "group_name" in cols else r[3])
+            updated_at=(r[5] if "group_name" in cols else r[4])
+            _insert_note_history(cur,nid,r[1] or "",group_name or "",content or "","delete",now)
+            recycle_cmds=[]
             try:
-                cur.execute("SELECT id,note_id,note_name,cmd_note_title,category,sub_category,description,tags,command FROM Commands WHERE note_id=?",(nid,))
+                cur.execute("SELECT id,note_id,note_name,cmd_note_title,category,sub_category,description,tags,command,created_at,updated_at FROM Commands WHERE note_id=?",(nid,))
                 for row in cur.fetchall():
                     _insert_cmd_history(cur,row[0],row[1],row[2],row[3],row[4],row[5],row[6],row[7],row[8],"delete",now)
+                    recycle_cmds.append({"id":row[0],"note_id":row[1],"note_name":row[2],"cmd_note_title":row[3],"category":row[4],"sub_category":row[5],"description":row[6],"tags":row[7],"command":row[8],"created_at":row[9] if len(row)>9 else "","updated_at":row[10] if len(row)>10 else ""})
             except:pass
+            _recycle_bin.put_entry_cur(cur,_recycle_bin.TYPE_NOTE,r[1] or "",{"note":{"id":nid,"note_name":r[1] or "","group_name":group_name or "","content":content or "","created_at":created_at or "","updated_at":updated_at or ""},"commands":recycle_cmds},source="Notes",entity_key=str(nid),deleted_at=now,expires_at=_recycle_bin.expires_text())
             con.execute("DELETE FROM Commands WHERE note_id=?",(nid,))
             cur.execute("DELETE FROM Notes WHERE id=?",(nid,))
             con.commit()
@@ -663,8 +697,13 @@ class _NoteLinkDlg(QDialog):
         self.resize(620,520)
         ico=_abs("..","Assets","logox.png")
         if os.path.isfile(ico):self.setWindowIcon(QIcon(ico))
-        self._notes=[_norm(n) for n in (notes or []) if _norm(n)]
-        self._notes=sorted(list(dict.fromkeys(self._notes)),key=lambda s:s.lower())
+        refs=[]
+        for item in (notes or []):
+            ref=_note_refs.serialize_note_ref(item)
+            if _note_refs.note_ref_name(ref):
+                refs.append(ref)
+        self._notes=_note_refs.dedupe_note_refs(refs)
+        self._notes.sort(key=lambda item:_note_refs.note_ref_name(item).lower())
         self._view=[]
         self._color=_norm_hex_color(color_value) or _NOTE_LINK_COLOR_DEFAULT
         root=QVBoxLayout(self);root.setContentsMargins(14,14,14,14);root.setSpacing(12)
@@ -714,7 +753,7 @@ class _NoteLinkDlg(QDialog):
         v.addLayout(b)
         root.addWidget(box,1)
         if self._notes:
-            model=QStringListModel(self._notes,self.in_note)
+            model=QStringListModel([_note_refs.note_ref_name(item) for item in self._notes],self.in_note)
             comp=QCompleter(model,self.in_note)
             comp.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
             comp.setFilterMode(Qt.MatchFlag.MatchContains)
@@ -741,10 +780,11 @@ class _NoteLinkDlg(QDialog):
         self._apply_color_btn()
     def _render_notes(self):
         q=_norm(self.search.text()).lower()
-        self._view=[n for n in self._notes if not q or q in n.lower()]
+        self._view=[n for n in self._notes if not q or q in _note_refs.note_ref_name(n).lower()]
         self.tbl.setRowCount(len(self._view))
         for i,n in enumerate(self._view):
-            it=QTableWidgetItem(n);it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);it.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            name=_note_refs.note_ref_name(n)
+            it=QTableWidgetItem(name);it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);it.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
             self.tbl.setItem(i,0,it)
             self.tbl.setRowHeight(i,36)
         self.tbl.clearSelection()
@@ -753,12 +793,13 @@ class _NoteLinkDlg(QDialog):
         nm=_norm(self.in_note.text())
         if not nm:return
         for i,n in enumerate(self._view):
-            if n.lower()==nm.lower():
+            if _note_refs.note_ref_name(n).lower()==nm.lower():
                 self.tbl.selectRow(i)
                 break
     def _pick_note(self,row,col,accept=False):
         if row<0 or row>=len(self._view):return
-        note=self._view[row]
+        ref=self._view[row]
+        note=_note_refs.note_ref_name(ref)
         prev=_norm(self.in_note.text())
         self.in_note.setText(note)
         title=self.in_title.text().strip()
@@ -771,13 +812,19 @@ class _NoteLinkDlg(QDialog):
         if not note:
             QMessageBox.warning(self,"Missing","Note is required.")
             return
-        if self._notes and not any(note.lower()==n.lower() for n in self._notes):
+        ref=None
+        for item in self._notes:
+            if _note_refs.note_ref_name(item).lower()==note.lower():
+                ref=_note_refs.serialize_note_ref(item)
+                break
+        if self._notes and not ref:
             QMessageBox.warning(self,"Missing","Choose a note from the list.")
             return
         if not title:
             title=note
             self.in_title.setText(title)
-        self._vals={"title":title,"note":note,"color":_norm_hex_color(self._color) or _NOTE_LINK_COLOR_DEFAULT}
+        ref=ref or _note_refs.serialize_note_ref(note_name=note)
+        self._vals={"title":title,"note_id":ref.get("note_id"),"note_name":ref.get("note_name",""),"note":ref.get("note_name",""),"color":_norm_hex_color(self._color) or _NOTE_LINK_COLOR_DEFAULT}
         self.accept()
     def vals(self):return self._vals
 class _CmdBlockDlg(QDialog):
@@ -1411,15 +1458,17 @@ class NoteEdit(QTextEdit):
             title="".join(t for _,_,t in segs)
             start=min(s for s,_,_ in segs);end=max(e for _,e,_ in segs)
             data=_decode_note_link_data(target[len(_NOTE_LINK_ANCHOR):])
-            note=_norm(data.get("note",""))
+            note_name=_note_refs.note_ref_name(data)
+            note_id=_note_refs.note_ref_id(data)
             color=_norm_hex_color(data.get("color",""))
-            return {"start":start,"end":end,"note":note,"color":color,"title":title,"href":target}
+            return {"start":start,"end":end,"note_id":note_id,"note_name":note_name,"note":note_name,"color":color,"title":title,"href":target}
         except Exception:
             return None
     def _note_link_format(self,note,color):
-        nm=_norm(note)
+        ref=_note_refs.normalize_note_ref(note)
+        nm=_note_refs.note_ref_name(ref)
         c=_norm_hex_color(color) or _NOTE_LINK_COLOR_DEFAULT
-        token=_encode_note_link_data(nm,c)
+        token=_encode_note_link_data(ref,c)
         fmt=QTextCharFormat()
         fmt.setAnchor(True)
         fmt.setAnchorHref(_NOTE_LINK_ANCHOR+token)
@@ -1429,7 +1478,8 @@ class NoteEdit(QTextEdit):
         fmt.setFontUnderline(False)
         return fmt
     def insert_note_link(self,note,title,color,cursor=None):
-        nm=_norm(note)
+        ref=_note_refs.normalize_note_ref(note)
+        nm=_note_refs.note_ref_name(ref)
         if not nm:return False
         t=str(title or nm).replace("\r","\n").replace("\n"," ").strip()
         if not t:t=nm
@@ -1441,7 +1491,7 @@ class NoteEdit(QTextEdit):
                 cur.setPosition(tb.lastCursorPosition().position()+1)
         except Exception:
             pass
-        fmt=self._note_link_format(nm,color)
+        fmt=self._note_link_format(ref,color)
         cur.beginEditBlock()
         if cur.hasSelection():cur.removeSelectedText()
         cur.insertText(t,fmt)
@@ -1450,11 +1500,12 @@ class NoteEdit(QTextEdit):
         return True
     def _replace_note_link(self,info,note,title,color):
         if not info:return False
-        nm=_norm(note) or _norm(info.get("note",""))
+        ref=_note_refs.normalize_note_ref(note,note_id=info.get("note_id"),note_name=info.get("note_name",info.get("note","")))
+        nm=_note_refs.note_ref_name(ref)
         if not nm:return False
         t=str(title or nm).replace("\r","\n").replace("\n"," ").strip()
         if not t:t=nm
-        fmt=self._note_link_format(nm,color)
+        fmt=self._note_link_format(ref,color)
         cur=QTextCursor(self.document())
         cur.beginEditBlock()
         cur.setPosition(info["start"])
@@ -1476,13 +1527,43 @@ class NoteEdit(QTextEdit):
         return True
     def _edit_note_link(self,info):
         if not info or not callable(self._on_note_link_edit):return
-        data={"note":info.get("note",""),"title":info.get("title",""),"color":info.get("color","")}
+        data={"note_id":info.get("note_id"),"note_name":info.get("note_name",info.get("note","")),"note":info.get("note_name",info.get("note","")),"title":info.get("title",""),"color":info.get("color","")}
         out=self._on_note_link_edit(data)
         if not isinstance(out,dict):return
-        note=out.get("note","") or info.get("note","")
+        note={"note_id":out.get("note_id",info.get("note_id")),"note_name":out.get("note_name",out.get("note",info.get("note_name",info.get("note",""))))}
         title=out.get("title","") or ""
         color=out.get("color","") or info.get("color","")
         self._replace_note_link(info,note,title,color)
+    def normalize_note_links(self,resolve_note):
+        if not callable(resolve_note):return False
+        doc=self.document()
+        changes=[]
+        block=doc.begin()
+        while block.isValid():
+            it=block.begin()
+            while not it.atEnd():
+                frag=it.fragment()
+                if frag.isValid():
+                    fmt=frag.charFormat()
+                    href=fmt.anchorHref() or ""
+                    if fmt.isAnchor() and href.startswith(_NOTE_LINK_ANCHOR):
+                        data=_decode_note_link_data(href[len(_NOTE_LINK_ANCHOR):])
+                        ref=resolve_note(data)
+                        if ref:
+                            new_href=_NOTE_LINK_ANCHOR+_encode_note_link_data(ref,data.get("color",""))
+                            if new_href!=href:
+                                changes.append((frag.position(),frag.length(),ref,data.get("color","")))
+                it+=1
+            block=block.next()
+        if not changes:return False
+        cur=QTextCursor(doc)
+        cur.beginEditBlock()
+        for pos,length,ref,color in reversed(changes):
+            cur.setPosition(pos)
+            cur.setPosition(pos+length,QTextCursor.MoveMode.KeepAnchor)
+            cur.mergeCharFormat(self._note_link_format(ref,color))
+        cur.endEditBlock()
+        return True
     def _start_link_drag(self,info):
         if not info:return
         doc=self.document()
@@ -1864,8 +1945,8 @@ class NoteEdit(QTextEdit):
         self.viewport().setCursor(Qt.CursorShape.IBeamCursor)
         if self._link_click_info and not self._link_dragging and e.button()==Qt.MouseButton.LeftButton:
             try:
-                note=_norm(self._link_click_info.get("note",""))
-                if note and callable(self._on_note_link):self._on_note_link(note)
+                ref={"note_id":self._link_click_info.get("note_id"),"note_name":self._link_click_info.get("note_name",self._link_click_info.get("note",""))}
+                if _note_refs.note_ref_key(ref) and callable(self._on_note_link):self._on_note_link(ref)
             except Exception:
                 pass
         self._link_click_info=None
@@ -1891,7 +1972,10 @@ class Widget(QWidget):
         self._targets_mtime=None
         meta=_load_notes_meta()
         self._pinned=list(meta.get("pinned",[]))
-        self._recent=[]
+        self._recent=list(meta.get("recent",[]))
+        self._group_meta=list(meta.get("groups",[]))
+        self._nav_collapsed_groups=list(meta.get("nav_collapsed_groups",[]))
+        self._group_rows=[]
         self._toast=None;self._toast_msg=None
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.frame=QFrame(self);self.frame.setObjectName("NoteFrame");root.addWidget(self.frame,1)
@@ -1900,13 +1984,18 @@ class Widget(QWidget):
         v.addWidget(self.tabs,1)
         self.tab_nav=QWidget();self.tab_nav.setObjectName("Page")
         self.tab_list=QWidget();self.tab_list.setObjectName("Page")
+        self.tab_groups=QWidget();self.tab_groups.setObjectName("Page")
         self.tabs.addTab(self.tab_nav,"Navigate")
         self.tabs.addTab(self.tab_list,"Notes Manager")
+        self.tabs.addTab(self.tab_groups,"Group Manager")
         self._build_nav()
         self._build_list()
+        self._build_groups()
         try:self._render_nav_list(force=True)
         except Exception:pass
         try:self._render_list()
+        except Exception:pass
+        try:self._render_group_manager(force=True)
         except Exception:pass
         self.tab_create=QWidget(self);self.tab_create.setObjectName("Page");self.tab_create.hide()
         self._build_create()
@@ -1928,6 +2017,7 @@ class Widget(QWidget):
         v=QVBoxLayout(self.tab_create);v.setContentsMargins(0,0,0,0);v.setSpacing(6)
         top=QHBoxLayout();top.setContentsMargins(14,6,14,0);top.setSpacing(8)
         self.in_name=QLineEdit(self.tab_create);self.in_name.setObjectName("NoteName");self.in_name.setPlaceholderText("Note Name");self.in_name.setMaxLength(256)
+        self.in_group=SelectInput("NoteGroup","Group (optional)",self.tab_create);self.in_group.setMaxLength(256);self.in_group.setMinimumWidth(240)
         self.btn_add=QToolButton(self.tab_create);self.btn_add.setObjectName("NoteAddCmd");self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_add.setText("Add Command")
         self.btn_link=QToolButton(self.tab_create);self.btn_link.setObjectName("NoteAddLink");self.btn_link.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_link.setText("Add Link")
         self.btn_pick=QToolButton(self.tab_create);self.btn_pick.setObjectName("NotePickCmd");self.btn_pick.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_pick.setText("Pick Command")
@@ -1940,7 +2030,7 @@ class Widget(QWidget):
         self.btn_pick.clicked.connect(self._open_cmd_picker)
         self.btn_clear.clicked.connect(self._clear_note)
         self.btn_save.clicked.connect(lambda:self._save_note(True))
-        top.addWidget(self.in_name,1);top.addWidget(self.btn_add,0);top.addWidget(self.btn_link,0);top.addWidget(self.btn_pick,0);top.addWidget(self.btn_clear,0);top.addWidget(self.btn_save,0)
+        top.addWidget(self.in_name,1);top.addWidget(self.in_group,1);top.addWidget(self.btn_add,0);top.addWidget(self.btn_link,0);top.addWidget(self.btn_pick,0);top.addWidget(self.btn_clear,0);top.addWidget(self.btn_save,0)
         bar=QFrame(self.tab_create);bar.setObjectName("NoteBar")
         bh=QHBoxLayout(bar);bh.setContentsMargins(14,6,14,6);bh.setSpacing(8)
         self.b_b=QToolButton(bar);self.b_b.setObjectName("FmtBold");self.b_b.setCursor(Qt.CursorShape.PointingHandCursor);self.b_b.setText("B");self.b_b.setCheckable(True)
@@ -2028,10 +2118,12 @@ class Widget(QWidget):
         v.addWidget(self.cmd_box,0)
         v.addWidget(self.edit,1)
         self.in_name.textChanged.connect(self._mark_dirty)
+        self.in_group.textChanged.connect(self._mark_dirty)
         self.edit.textChanged.connect(self._mark_dirty)
         self._placeholder_highlighter=_PlaceholderHighlighter(self.edit.document())
         try:self._placeholder_highlighter.set_note_ref_color(self._note_ref_color)
         except Exception:pass
+        self._refresh_editor_group_options()
         self._refresh_placeholder_keys(force=True)
         self._update_placeholder_helper()
     def _build_nav(self):
@@ -2040,7 +2132,7 @@ class Widget(QWidget):
         v.addWidget(split,1)
         left=QFrame(split);left.setObjectName("NoteNavLeft")
         lv=QVBoxLayout(left);lv.setContentsMargins(10,10,10,10);lv.setSpacing(8)
-        self.nav_search=QLineEdit(left);self.nav_search.setObjectName("NoteAddSearch");self.nav_search.setPlaceholderText("Search notes...")
+        self.nav_search=QLineEdit(left);self.nav_search.setObjectName("NoteAddSearch");self.nav_search.setPlaceholderText("Search notes or groups...")
         self.nav_search.setMinimumHeight(30);self.nav_search.setMaximumHeight(30)
         self.nav_search.textChanged.connect(self._on_nav_search)
         lv.addWidget(self.nav_search,0)
@@ -2055,6 +2147,10 @@ class Widget(QWidget):
         self.nav_list_frame=QFrame(self.nav_scroll);self.nav_list_frame.setObjectName("NoteNavList")
         self.nav_list_layout=QVBoxLayout(self.nav_list_frame);self.nav_list_layout.setContentsMargins(0,0,0,0);self.nav_list_layout.setSpacing(6)
         self.nav_scroll.setWidget(self.nav_list_frame)
+        self.nav_list_frame.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.nav_list_frame.customContextMenuRequested.connect(lambda pos:self._nav_show_menu(self.nav_list_frame,pos))
+        self.nav_scroll.viewport().setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.nav_scroll.viewport().customContextMenuRequested.connect(lambda pos:self._nav_show_menu(self.nav_scroll.viewport(),pos))
         lv.addWidget(self.nav_scroll,1)
         right=QFrame(split);right.setObjectName("NoteNavDisplayFrame")
         rv=QVBoxLayout(right);rv.setContentsMargins(12,12,12,12);rv.setSpacing(8)
@@ -2105,6 +2201,8 @@ class Widget(QWidget):
         except:pass
         try:self.in_name.blockSignals(True);self.in_name.clear();self.in_name.blockSignals(False)
         except:pass
+        try:self.in_group.blockSignals(True);self.in_group.clear();self.in_group.blockSignals(False)
+        except:pass
         try:self.edit.blockSignals(True);self.edit.clear();self.edit.blockSignals(False)
         except:pass
         self._last_sig=None;self._dirty=False;self._note_id=None;self._orig_name=None
@@ -2123,11 +2221,14 @@ class Widget(QWidget):
         if os.path.isfile(ico):self.btn_create.setIcon(QIcon(ico));self.btn_create.setIconSize(QSize(16,16))
         self.btn_create.setMinimumHeight(30);self.btn_create.setMaximumHeight(30)
         self.btn_create.clicked.connect(lambda:self._open_create_dialog(True))
-        self.list_search=QLineEdit(self.tab_list);self.list_search.setObjectName("NoteAddSearch");self.list_search.setPlaceholderText("Search notes...")
+        self.list_search=QLineEdit(self.tab_list);self.list_search.setObjectName("NoteAddSearch");self.list_search.setPlaceholderText("Search notes or groups...")
         self.list_search.setMinimumHeight(30);self.list_search.setMaximumHeight(30)
         self.list_search.textChanged.connect(self._on_list_search)
+        self.list_group=QComboBox(self.tab_list);self.list_group.setObjectName("NotesPerPage");self.list_group.setMinimumHeight(30);self.list_group.setMaximumHeight(30)
+        self.list_group.currentIndexChanged.connect(lambda *_:self._on_list_search())
         top.addWidget(self.btn_create,0)
         top.addWidget(self.list_search,1)
+        top.addWidget(self.list_group,0)
         self.quick_wrap=QFrame(self.tab_list);self.quick_wrap.setObjectName("NotesQuickFrame");self.quick_wrap.setVisible(False)
         qw=QHBoxLayout(self.quick_wrap);qw.setContentsMargins(10,0,10,0);qw.setSpacing(12)
         self.quick_pinned=QFrame(self.quick_wrap);self.quick_pinned.setObjectName("NotesPinnedRow")
@@ -2140,8 +2241,8 @@ class Widget(QWidget):
         self.list_wrap=QFrame(self.tab_list);self.list_wrap.setObjectName("NoteAddTableFrame")
         tw=QVBoxLayout(self.list_wrap);tw.setContentsMargins(10,10,10,10);tw.setSpacing(10)
         self.list_tbl=QTableWidget(self.list_wrap);self.list_tbl.setObjectName("NoteAddTable")
-        self.list_tbl.setColumnCount(5)
-        self.list_tbl.setHorizontalHeaderLabels(["Pin","Note","Updated","#","X"])
+        self.list_tbl.setColumnCount(6)
+        self.list_tbl.setHorizontalHeaderLabels(["Pin","Note","Group","Updated","#","X"])
         self.list_tbl.verticalHeader().setVisible(False)
         self.list_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.list_tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -2158,9 +2259,10 @@ class Widget(QWidget):
         h.setSectionResizeMode(0,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(3,QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed)
-        self.list_tbl.setColumnWidth(0,44);self.list_tbl.setColumnWidth(3,44);self.list_tbl.setColumnWidth(4,44)
+        h.setSectionResizeMode(5,QHeaderView.ResizeMode.Fixed)
+        self.list_tbl.setColumnWidth(0,44);self.list_tbl.setColumnWidth(4,44);self.list_tbl.setColumnWidth(5,44)
         tw.addWidget(self.list_tbl,1)
         self.list_pager=QFrame(self.list_wrap);self.list_pager.setObjectName("NotesPagerFrame")
         ph=QHBoxLayout(self.list_pager);ph.setContentsMargins(0,0,0,0);ph.setSpacing(10)
@@ -2182,23 +2284,472 @@ class Widget(QWidget):
         v.addLayout(top)
         v.addWidget(self.quick_wrap,0)
         v.addWidget(self.list_wrap,1)
+    def _build_groups(self):
+        v=QVBoxLayout(self.tab_groups);v.setContentsMargins(0,0,0,0);v.setSpacing(8)
+        top=QHBoxLayout();top.setContentsMargins(14,8,14,0);top.setSpacing(10)
+        self.group_filter=QComboBox(self.tab_groups);self.group_filter.setObjectName("NotesPerPage");self.group_filter.setMinimumHeight(30);self.group_filter.setMaximumHeight(30)
+        self.group_filter.currentIndexChanged.connect(lambda *_:self._render_group_manager())
+        self.group_refresh=QToolButton(self.tab_groups);self.group_refresh.setObjectName("NotesPageNext");self.group_refresh.setCursor(Qt.CursorShape.PointingHandCursor);self.group_refresh.setText("Refresh")
+        self.group_refresh.clicked.connect(lambda:self._render_group_manager(force=True))
+        top.addWidget(QLabel("Show",self.tab_groups),0)
+        top.addWidget(self.group_filter,0)
+        top.addStretch(1)
+        top.addWidget(self.group_refresh,0)
+        split=QSplitter(Qt.Orientation.Horizontal,self.tab_groups);split.setObjectName("NoteNavSplit")
+        left=QFrame(split);left.setObjectName("NoteAddTableFrame")
+        lv=QVBoxLayout(left);lv.setContentsMargins(10,10,10,10);lv.setSpacing(8)
+        self.group_tbl=QTableWidget(left);self.group_tbl.setObjectName("NoteAddTable")
+        self.group_tbl.setColumnCount(3)
+        self.group_tbl.setHorizontalHeaderLabels(["Group","Notes","Count"])
+        self.group_tbl.verticalHeader().setVisible(False)
+        self.group_tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.group_tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.group_tbl.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        self.group_tbl.setAlternatingRowColors(False)
+        self.group_tbl.setShowGrid(True)
+        self.group_tbl.itemSelectionChanged.connect(self._on_group_row_selected)
+        gh=self.group_tbl.horizontalHeader()
+        gh.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        gf=gh.font();gf.setBold(True);gf.setWeight(800);gh.setFont(gf)
+        gh.setStretchLastSection(False)
+        gh.setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        gh.setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        gh.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed)
+        self.group_tbl.setColumnWidth(2,70)
+        lv.addWidget(self.group_tbl,1)
+        right=QFrame(split);right.setObjectName("NoteNavDisplayFrame")
+        rv=QVBoxLayout(right);rv.setContentsMargins(12,12,12,12);rv.setSpacing(8)
+        self.group_title=QLabel("Select a group",right);self.group_title.setObjectName("NoteNavTitle")
+        self.group_hint=QLabel("Double-click a note to open it in the editor.",right);self.group_hint.setObjectName("NotesTotal")
+        self.group_notes=QListWidget(right);self.group_notes.setObjectName("NoteNavList")
+        self.group_notes.itemDoubleClicked.connect(lambda *_:self._group_open_selected_note())
+        self.group_notes.currentItemChanged.connect(lambda *_:self._update_group_action_buttons())
+        btns=QHBoxLayout();btns.setContentsMargins(0,0,0,0);btns.setSpacing(8)
+        self.group_btn_rename=QToolButton(right);self.group_btn_rename.setObjectName("NoteSave");self.group_btn_rename.setCursor(Qt.CursorShape.PointingHandCursor);self.group_btn_rename.setText("Rename Group")
+        self.group_btn_move=QToolButton(right);self.group_btn_move.setObjectName("NoteAddCmd");self.group_btn_move.setCursor(Qt.CursorShape.PointingHandCursor);self.group_btn_move.setText("Move Note")
+        self.group_btn_ungroup=QToolButton(right);self.group_btn_ungroup.setObjectName("NoteClear");self.group_btn_ungroup.setCursor(Qt.CursorShape.PointingHandCursor);self.group_btn_ungroup.setText("Remove From Group")
+        self.group_btn_delete=QToolButton(right);self.group_btn_delete.setObjectName("NotePickCmd");self.group_btn_delete.setCursor(Qt.CursorShape.PointingHandCursor);self.group_btn_delete.setText("Delete Empty Group")
+        for b in (self.group_btn_rename,self.group_btn_move,self.group_btn_ungroup,self.group_btn_delete):
+            fb=b.font();fb.setBold(True);fb.setWeight(900);b.setFont(fb)
+        self.group_btn_rename.clicked.connect(self._rename_selected_group)
+        self.group_btn_move.clicked.connect(self._move_selected_note)
+        self.group_btn_ungroup.clicked.connect(self._remove_selected_note_from_group)
+        self.group_btn_delete.clicked.connect(self._delete_selected_empty_group)
+        btns.addWidget(self.group_btn_rename,0)
+        btns.addWidget(self.group_btn_move,0)
+        btns.addWidget(self.group_btn_ungroup,0)
+        btns.addStretch(1)
+        btns.addWidget(self.group_btn_delete,0)
+        rv.addWidget(self.group_title,0)
+        rv.addWidget(self.group_hint,0)
+        rv.addWidget(self.group_notes,1)
+        rv.addLayout(btns,0)
+        split.addWidget(left);split.addWidget(right)
+        split.setStretchFactor(0,1);split.setStretchFactor(1,1)
+        v.addLayout(top)
+        v.addWidget(split,1)
+        self._update_group_action_buttons()
+    def _group_summary_text(self,notes):
+        names=[_norm(n.get("note_name","")) for n in (notes or []) if _norm(n.get("note_name",""))]
+        if not names:return "No notes"
+        head=", ".join(names[:3])
+        if len(names)>3:head+=f", +{len(names)-3} more"
+        return head
+    def _group_full_text(self,notes):
+        names=[_norm(n.get("note_name","")) for n in (notes or []) if _norm(n.get("note_name",""))]
+        return ", ".join(names)
+    def _sync_group_meta_with_notes(self):
+        clean=_dedupe_ci(self._group_meta)
+        changed=(clean!=self._group_meta)
+        self._group_meta=clean
+        seen={_kci(x) for x in self._group_meta}
+        for n in self._notes_cache:
+            grp=_norm(n.get("group_name",""))
+            if grp and _kci(grp) not in seen:
+                self._group_meta.append(grp);seen.add(_kci(grp));changed=True
+        if changed:self._save_notes_meta()
+        self._refresh_editor_group_options()
+    def _rename_group_meta(self,old_group,new_group):
+        old=_norm(old_group);new=_norm(new_group)
+        if not old:return
+        out=[];seen=set();changed=False
+        for g in self._group_meta:
+            cur=_norm(g)
+            if _kci(cur)==_kci(old):
+                changed=True
+                if new and _kci(new) not in seen:
+                    out.append(new);seen.add(_kci(new))
+                continue
+            if cur and _kci(cur) not in seen:
+                out.append(cur);seen.add(_kci(cur))
+        if new and _kci(new) not in seen:
+            out.append(new);changed=True
+        if changed or out!=self._group_meta:
+            self._group_meta=out
+            self._save_notes_meta()
+        self._refresh_editor_group_options()
+    def _ensure_group_meta(self,group_name):
+        grp=_norm(group_name)
+        if not grp:return
+        if _kci(grp) in {_kci(x) for x in self._group_meta}:return
+        self._group_meta.append(grp)
+        self._save_notes_meta()
+        self._refresh_editor_group_options()
+    def _drop_group_meta(self,group_name):
+        grp=_norm(group_name)
+        if not grp:return
+        out=[g for g in self._group_meta if _kci(g)!=_kci(grp)]
+        if out!=self._group_meta:
+            self._group_meta=out
+            self._save_notes_meta()
+        self._refresh_editor_group_options()
+    def _refresh_group_filter(self):
+        if not hasattr(self,"group_filter"):
+            return
+        groups=sorted({_norm(n.get("group_name","")) for n in self._notes_cache if _norm(n.get("group_name",""))}|set(_dedupe_ci(self._group_meta)),key=lambda s:s.lower())
+        current=self.group_filter.currentData()
+        self.group_filter.blockSignals(True)
+        self.group_filter.clear()
+        self.group_filter.addItem("All Groups","*")
+        self.group_filter.addItem("Ungrouped","")
+        for g in groups:self.group_filter.addItem(g,g)
+        idx=0
+        for i in range(self.group_filter.count()):
+            if self.group_filter.itemData(i)==current:
+                idx=i;break
+        self.group_filter.setCurrentIndex(idx)
+        self.group_filter.blockSignals(False)
+    def _selected_group_row(self):
+        row=self.group_tbl.currentRow() if hasattr(self,"group_tbl") else -1
+        if row<0:return None
+        it=self.group_tbl.item(row,0)
+        if not it:return None
+        data=it.data(Qt.ItemDataRole.UserRole)
+        return data if isinstance(data,dict) else None
+    def _selected_group_note(self):
+        if not hasattr(self,"group_notes"):return None
+        it=self.group_notes.currentItem()
+        if not it:return None
+        data=it.data(Qt.ItemDataRole.UserRole)
+        return data if isinstance(data,dict) else None
+    def _update_group_action_buttons(self):
+        row=self._selected_group_row()
+        note=self._selected_group_note()
+        grp=_norm((row or {}).get("group_name",""))
+        count=int((row or {}).get("count",0) or 0)
+        has_group=bool(row)
+        can_rename=has_group and bool(grp)
+        can_move=note is not None
+        can_ungroup=note is not None and bool(_norm(note.get("group_name","")))
+        can_delete=has_group and bool(grp) and count==0
+        for btn,val in (
+            (getattr(self,"group_btn_rename",None),can_rename),
+            (getattr(self,"group_btn_move",None),can_move),
+            (getattr(self,"group_btn_ungroup",None),can_ungroup),
+            (getattr(self,"group_btn_delete",None),can_delete),
+        ):
+            try:
+                if btn is not None:btn.setEnabled(bool(val))
+            except Exception:
+                pass
+    def _set_editor_group_value(self,group_name):
+        try:
+            self._refresh_editor_group_options()
+            self.in_group.blockSignals(True)
+            self.in_group.setText(_norm(group_name))
+            self.in_group.blockSignals(False)
+            self._last_sig=_sig(_norm(self.in_name.text()),self.edit.toHtml(),_norm(group_name))
+            self._dirty=False
+        except Exception:
+            pass
+    def _editor_group_options(self):
+        groups=set(_dedupe_ci(self._group_meta))
+        for n in self._notes_cache:
+            grp=_norm(n.get("group_name",""))
+            if grp:groups.add(grp)
+        return sorted([g for g in groups if _norm(g)],key=lambda s:s.lower())
+    def _refresh_editor_group_options(self):
+        if not hasattr(self,"in_group") or not hasattr(self.in_group,"set_items"):return
+        try:self.in_group.set_items(self._editor_group_options(),"Group (optional)")
+        except Exception:pass
+    def _apply_group_update(self,notes,target_group,action):
+        rows=[]
+        for n in notes or []:
+            try:nid=int(n.get("id"))
+            except Exception:continue
+            rows.append({"id":nid,"note_name":_norm(n.get("note_name","")),"content":n.get("content","") or ""})
+        if not rows:return 0
+        target=_norm(target_group)
+        now=datetime.now(timezone.utc).isoformat()
+        with sqlite3.connect(self._dbp,timeout=5) as con:
+            _ensure_schema(con)
+            cur=con.cursor()
+            for row in rows:
+                cur.execute("UPDATE Notes SET group_name=?,updated_at=? WHERE id=?",(target,now,int(row["id"])))
+                _insert_note_history(cur,row["id"],row["note_name"],target,row["content"],action,now)
+        try:
+            cur_id=int(self._note_id) if self._note_id is not None else None
+        except Exception:
+            cur_id=None
+        if cur_id is not None and cur_id in {r["id"] for r in rows}:
+            self._set_editor_group_value(target)
+        return len(rows)
+    def _group_rows_data(self):
+        by_group={}
+        for n in self._notes_cache:
+            grp=_norm(n.get("group_name",""))
+            by_group.setdefault(grp,[]).append(n)
+        for grp in list(by_group.keys()):
+            by_group[grp]=sorted(by_group[grp],key=lambda n:_kci(n.get("note_name","")))
+        rows=[]
+        group_filter=self.group_filter.currentData() if hasattr(self,"group_filter") else "*"
+        if by_group.get("") or group_filter=="":
+            rows.append({"group_name":"","label":"Ungrouped","notes":by_group.get("",[]),"count":len(by_group.get("",[]))})
+        groups=sorted(set(_dedupe_ci(self._group_meta))|{g for g in by_group if g},key=lambda s:s.lower())
+        for grp in groups:
+            rows.append({"group_name":grp,"label":grp,"notes":by_group.get(grp,[]),"count":len(by_group.get(grp,[]))})
+        if group_filter not in ("*",None):
+            rows=[r for r in rows if _kci(r.get("group_name",""))==_kci(group_filter)]
+        return rows
+    def _render_group_manager(self,force=False):
+        if force or not self._notes_cache:
+            try:self._notes_cache=_load_notes(self._dbp)
+            except Exception:self._notes_cache=[]
+        self._prune_meta()
+        self._sync_group_meta_with_notes()
+        sel_row=self._selected_group_row()
+        sel_group=_norm((sel_row or {}).get("group_name",""))
+        sel_note=self._selected_group_note()
+        try:sel_note_id=int((sel_note or {}).get("id"))
+        except Exception:sel_note_id=None
+        self._refresh_group_filter()
+        rows=self._group_rows_data()
+        self._group_rows=rows
+        self.group_tbl.blockSignals(True)
+        self.group_tbl.setRowCount(len(rows))
+        for r,row in enumerate(rows):
+            gi=QTableWidgetItem(row.get("label",""));gi.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);gi.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft);gi.setData(Qt.ItemDataRole.UserRole,row)
+            ni=QTableWidgetItem(self._group_summary_text(row.get("notes",[])));ni.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ni.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            ni.setToolTip(self._group_full_text(row.get("notes",[])) or "No notes")
+            ci=QTableWidgetItem(str(int(row.get("count",0) or 0)));ci.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ci.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            self.group_tbl.setItem(r,0,gi);self.group_tbl.setItem(r,1,ni);self.group_tbl.setItem(r,2,ci)
+            self.group_tbl.setRowHeight(r,44)
+        self.group_tbl.blockSignals(False)
+        if not rows:
+            self.group_tbl.clearSelection()
+            self.group_notes.clear()
+            self.group_title.setText("No groups")
+            self.group_hint.setText("Create a grouped note or move a note into a group.")
+            self._update_group_action_buttons()
+            return
+        idx=0
+        for i,row in enumerate(rows):
+            if _kci(row.get("group_name",""))==_kci(sel_group):
+                idx=i;break
+        self.group_tbl.selectRow(idx)
+        self._on_group_row_selected(selected_note_id=sel_note_id)
+    def _on_group_row_selected(self,*a,selected_note_id=None):
+        row=self._selected_group_row()
+        self.group_notes.clear()
+        if not row:
+            self.group_title.setText("Select a group")
+            self.group_hint.setText("Double-click a note to open it in the editor.")
+            self._update_group_action_buttons()
+            return
+        label=row.get("label","Group")
+        notes=row.get("notes",[])
+        count=int(row.get("count",0) or 0)
+        self.group_title.setText(f"{label} ({count})")
+        self.group_hint.setText(self._group_full_text(notes) if notes else "No notes in this group.")
+        pick=0
+        for i,n in enumerate(notes):
+            text=_norm(n.get("note_name","")) or "Untitled"
+            it=QListWidgetItem(text,self.group_notes)
+            it.setData(Qt.ItemDataRole.UserRole,n)
+            grp=_group_label(n.get("group_name",""))
+            it.setToolTip(f"{grp} | {text}")
+            try:
+                if selected_note_id is not None and int(n.get("id"))==int(selected_note_id):
+                    pick=i
+            except Exception:
+                pass
+        if notes:
+            self.group_notes.setCurrentRow(min(max(0,pick),len(notes)-1))
+        self._update_group_action_buttons()
+    def _group_open_selected_note(self):
+        note=self._selected_group_note()
+        if not note:return
+        if not self._confirm_save_if_dirty():return
+        self._load_into_editor(note)
+    def _rename_selected_group(self):
+        row=self._selected_group_row()
+        if not row:return
+        old_group=_norm(row.get("group_name",""))
+        if not old_group:
+            QMessageBox.information(self.window() if self.window() else self,"Ungrouped","Ungrouped notes cannot be renamed. Move a note into a named group instead.")
+            return
+        if not self._confirm_save_if_dirty():return
+        new_group,ok=QInputDialog.getText(self,"Rename Group","New group name:",text=old_group)
+        if not ok:return
+        new_group=_norm(new_group)
+        if not new_group:
+            QMessageBox.warning(self.window() if self.window() else self,"Missing","Group name is required.")
+            return
+        if _kci(new_group)==_kci(old_group):return
+        notes=list(row.get("notes",[]))
+        changed=0
+        if notes:
+            changed=self._apply_group_update(notes,new_group,"group_rename")
+        self._rename_group_meta(old_group,new_group)
+        try:self._render_list()
+        except Exception:pass
+        try:self._render_nav_list(force=True)
+        except Exception:pass
+        self._render_group_manager(force=True)
+        self._toast_show(f"Renamed group to {new_group}",1800)
+        _log("[+]",f"Renamed group: {old_group} -> {new_group} notes={changed}")
+    def _move_selected_note(self):
+        note=self._selected_group_note()
+        if not note:return
+        if not self._confirm_save_if_dirty():return
+        cur_group=_norm(note.get("group_name",""))
+        target,ok=QInputDialog.getText(self,"Move Note","Target group (leave blank for ungrouped):",text=cur_group)
+        if not ok:return
+        target=_norm(target)
+        if _kci(target)==_kci(cur_group):return
+        action="group_move" if target else "ungroup"
+        changed=self._apply_group_update([note],target,action)
+        if target:self._ensure_group_meta(target)
+        try:self._render_list()
+        except Exception:pass
+        try:self._render_nav_list(force=True)
+        except Exception:pass
+        self._render_group_manager(force=True)
+        msg=f"Moved note to {_group_label(target)}" if target else "Removed note from group"
+        self._toast_show(msg,1800)
+        _log("[+]",f"Moved note: {note.get('note_name','')} -> {_group_label(target)} changed={changed}")
+    def _remove_selected_note_from_group(self):
+        note=self._selected_group_note()
+        if not note:return
+        if not _norm(note.get("group_name","")):return
+        if not self._confirm_save_if_dirty():return
+        changed=self._apply_group_update([note],"","ungroup")
+        try:self._render_list()
+        except Exception:pass
+        try:self._render_nav_list(force=True)
+        except Exception:pass
+        self._render_group_manager(force=True)
+        self._toast_show("Removed note from group",1800)
+        _log("[+]",f"Ungrouped note: {note.get('note_name','')} changed={changed}")
+    def _delete_selected_empty_group(self):
+        row=self._selected_group_row()
+        if not row:return
+        grp=_norm(row.get("group_name",""))
+        cnt=int(row.get("count",0) or 0)
+        if not grp:return
+        if cnt>0:
+            QMessageBox.information(self.window() if self.window() else self,"Group Not Empty","Move or ungroup all notes before deleting this group.")
+            return
+        if QMessageBox.question(self.window() if self.window() else self,"Delete Empty Group",f"Delete empty group: {grp}?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+        self._drop_group_meta(grp)
+        self._render_group_manager(force=True)
+        self._toast_show(f"Deleted empty group: {grp}",1800)
+        _log("[+]",f"Deleted empty group: {grp}")
     def _on_nav_search(self,*a):
         self._render_nav_list()
+    def _nav_group_key(self,group_name):
+        grp=_norm(group_name)
+        if not grp or _kci(grp)==_NAV_UNGROUPED_KEY:return _NAV_UNGROUPED_KEY
+        return _kci(grp)
+    def _nav_group_label_text(self,group_name,count,collapsed):
+        label=_group_label(group_name)
+        arrow="▶" if collapsed else "▼"
+        return f"{arrow} {label} ({int(count or 0)})"
+    def _nav_group_is_collapsed(self,group_name):
+        key=self._nav_group_key(group_name)
+        return key in {self._nav_group_key(x) for x in (self._nav_collapsed_groups or [])}
+    def _set_nav_group_collapsed(self,group_name,collapsed):
+        grp=_norm(group_name)
+        key=self._nav_group_key(grp)
+        rows=[];seen=set()
+        for item in (self._nav_collapsed_groups or []):
+            cur=_norm(item)
+            curk=self._nav_group_key(cur)
+            if curk in seen:continue
+            if curk==key:
+                if collapsed and key not in seen:
+                    rows.append((grp if grp else _NAV_UNGROUPED_KEY));seen.add(key)
+                continue
+            rows.append(cur);seen.add(curk)
+        if collapsed and key not in seen:rows.append((grp if grp else _NAV_UNGROUPED_KEY))
+        if rows!=self._nav_collapsed_groups:
+            self._nav_collapsed_groups=rows
+            self._save_notes_meta()
+    def _toggle_nav_group(self,group_name):
+        self._set_nav_group_collapsed(group_name,not self._nav_group_is_collapsed(group_name))
+        self._render_nav_list()
+    def _find_existing_group_name(self,group_name):
+        grp=_norm(group_name)
+        if not grp:return ""
+        for item in self._editor_group_options():
+            if _kci(item)==_kci(grp):return item
+        return ""
+    def _nav_create_group(self):
+        name,ok=QInputDialog.getText(self.window() if self.window() else self,"Create Group","Group name:")
+        if not ok:return
+        grp=_norm(name)
+        if not grp:
+            QMessageBox.warning(self.window() if self.window() else self,"Missing","Group name is required.")
+            return
+        existing=self._find_existing_group_name(grp)
+        final_group=existing or grp
+        if not existing:self._ensure_group_meta(final_group)
+        self._set_nav_group_collapsed(final_group,False)
+        try:self._render_nav_list(force=True)
+        except Exception:pass
+        try:self._render_group_manager(force=True)
+        except Exception:pass
+        self._toast_show(("Group already exists: " if existing else "Created group: ")+final_group,1800)
+        _log("[+]",f"{'Existing' if existing else 'Created'} group from Navigate: {final_group}")
+    def _nav_start_new_note(self,group_name=""):
+        grp=_norm(group_name)
+        if grp:self._set_nav_group_collapsed(grp,False)
+        if not self._open_create_dialog(True):return False
+        self._refresh_editor_group_options()
+        try:
+            self.in_group.blockSignals(True)
+            self.in_group.setText(grp)
+            self.in_group.blockSignals(False)
+        except Exception:
+            pass
+        try:self._last_sig=_sig(_norm(self.in_name.text()),self.edit.toHtml(),grp)
+        except Exception:self._last_sig=None
+        self._dirty=False
+        try:self.in_name.setFocus()
+        except Exception:pass
+        return True
     def _render_nav_list(self,force=False):
         if force or not self._notes_cache:
             try:self._notes_cache=_load_notes(self._dbp)
             except Exception:self._notes_cache=[]
         q=_norm(self.nav_search.text()).lower() if hasattr(self,"nav_search") else ""
-        rows=[]
-        for n in self._notes_cache:
-            nm=_norm(n.get("note_name",""))
-            if not nm:continue
-            if q and q not in nm.lower():continue
-            rows.append(n)
+        rows=sorted(list(self._notes_cache or []),key=lambda n:(_group_sort_key(n.get("group_name","")),_kci(n.get("note_name",""))))
         try:self._clear_layout(self.nav_list_layout)
         except Exception:pass
         self._nav_group=QButtonGroup(self);self._nav_group.setExclusive(True)
-        if not rows:
+        groups_map={}
+        for n in rows:
+            grp=_norm(n.get("group_name",""))
+            nm=_norm(n.get("note_name",""))
+            if not nm:continue
+            if q and q not in (nm+" "+grp).lower():continue
+            groups_map.setdefault(grp,[]).append(n)
+        group_names=[]
+        if groups_map.get(""):group_names.append("")
+        named_groups=sorted(set(_dedupe_ci(self._group_meta))|{g for g in groups_map if g},key=lambda s:s.lower())
+        for grp in named_groups:
+            if not q or groups_map.get(grp) or q in grp.lower():group_names.append(grp)
+        if not group_names:
             lbl=QLabel("No notes",self.nav_list_frame);lbl.setObjectName("NoteNavEmpty")
             self.nav_list_layout.addWidget(lbl,0)
             self.nav_list_layout.addStretch(1)
@@ -2211,37 +2762,65 @@ class Widget(QWidget):
         except Exception:
             view_w=0
         avail=max(120,(view_w-24) if view_w>0 else 220)
-        for n in rows:
-            nm=_norm(n.get("note_name",""))
-            b=QToolButton(self.nav_list_frame);b.setObjectName("NoteNavBtn");b.setCursor(Qt.CursorShape.PointingHandCursor)
-            b.setText(self._nav_elide_text(nm,avail,b.font()));b.setCheckable(True)
-            b.setToolTip(nm)
-            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
-            b.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
-            b.setMinimumHeight(32);b.setMaximumHeight(32)
-            b.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-            b.customContextMenuRequested.connect(lambda pos,btn=b,v=n:self._nav_show_menu(btn,pos,v))
-            b.clicked.connect(lambda chk=False,v=n:self._nav_open_note(v))
-            if self._nav_selected and _kci(self._nav_selected)==_kci(nm):
-                b.setChecked(True)
-            self._nav_group.addButton(b)
-            self.nav_list_layout.addWidget(b,0)
+        for grp in group_names:
+            notes=list(groups_map.get(grp,[]))
+            collapsed=(False if q else self._nav_group_is_collapsed(grp))
+            hdr=QToolButton(self.nav_list_frame);hdr.setObjectName("NoteNavGroupBtn");hdr.setCursor(Qt.CursorShape.PointingHandCursor)
+            hdr.setText(self._nav_group_label_text(grp,len(notes),collapsed))
+            hdr.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+            hdr.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+            hdr.setMinimumHeight(28);hdr.setMaximumHeight(28)
+            hdr.clicked.connect(lambda chk=False,g=grp:self._toggle_nav_group(g))
+            hdr.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            hdr.customContextMenuRequested.connect(lambda pos,btn=hdr,g=grp:self._nav_show_menu(btn,pos,group_name=g))
+            self.nav_list_layout.addWidget(hdr,0)
+            if collapsed:continue
+            for n in notes:
+                nm=_norm(n.get("note_name",""))
+                b=QToolButton(self.nav_list_frame);b.setObjectName("NoteNavChildBtn");b.setCursor(Qt.CursorShape.PointingHandCursor)
+                b.setText(self._nav_elide_text(nm,avail,b.font()));b.setCheckable(True)
+                b.setToolTip(f"{_group_label(grp)} | {nm}")
+                b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextOnly)
+                b.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
+                b.setMinimumHeight(32);b.setMaximumHeight(32)
+                b.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+                b.customContextMenuRequested.connect(lambda pos,btn=b,v=n,g=grp:self._nav_show_menu(btn,pos,v,g))
+                b.clicked.connect(lambda chk=False,v=n:self._nav_open_note(v))
+                if self._nav_selected and _kci(self._nav_selected)==_kci(nm):
+                    b.setChecked(True)
+                self._nav_group.addButton(b)
+                self.nav_list_layout.addWidget(b,0)
         self.nav_list_layout.addStretch(1)
     def _nav_open_note(self,n):
         if not isinstance(n,dict):return
         nm=_norm(n.get("note_name",""))
+        grp=_norm(n.get("group_name",""))
+        if grp:self._set_nav_group_collapsed(grp,False)
         self._nav_selected=nm
-        self.nav_title.setText(nm or "Note")
+        self.nav_title.setText(f"{_group_label(grp)} | {nm}" if nm else "Note")
+        try:self._touch_recent(n,refresh_list=False)
+        except Exception:pass
         try:self.nav_view.setHtml(n.get("content","") or "")
         except Exception:
             try:self.nav_view.setPlainText(_strip_html(n.get("content","") or ""))
             except Exception:pass
-    def _nav_show_menu(self,btn,pos,n):
-        if not isinstance(n,dict):return
+    def _nav_show_menu(self,btn,pos,n=None,group_name=""):
+        note=n if isinstance(n,dict) else None
+        grp=_norm(group_name if _norm(group_name) else ((note or {}).get("group_name","") if note else ""))
         m=QMenu(btn)
-        act=m.addAction("Edit Note")
-        act.triggered.connect(lambda chk=False,v=n:self._nav_edit_note(v))
-        m.exec(btn.mapToGlobal(pos))
+        act_group=m.addAction("Create Group")
+        act_note_group=m.addAction((f"Create Note in {_group_label(grp)}") if grp else "Create Note in Group")
+        act_note_group.setEnabled(bool(grp))
+        act_note_plain=m.addAction("Create Ungrouped Note")
+        act_edit=None
+        if note is not None:
+            m.addSeparator()
+            act_edit=m.addAction("Edit Note")
+        chosen=m.exec(btn.mapToGlobal(pos))
+        if chosen==act_group:self._nav_create_group()
+        elif chosen==act_note_group:self._nav_start_new_note(grp)
+        elif chosen==act_note_plain:self._nav_start_new_note("")
+        elif act_edit is not None and chosen==act_edit:self._nav_edit_note(note)
     def _nav_edit_note(self,n):
         if not isinstance(n,dict):return
         if not self._confirm_save_if_dirty():return
@@ -2254,8 +2833,7 @@ class Widget(QWidget):
         if not href:return
         if href.startswith(_NOTE_LINK_ANCHOR):
             data=_decode_note_link_data(href[len(_NOTE_LINK_ANCHOR):])
-            note=_norm(data.get("note",""))
-            if note:self.open_note_by_name(note)
+            if _note_refs.note_ref_key(data):self.open_note_ref(data)
     def _open_note_in_nav(self,n):
         if not isinstance(n,dict):return False
         if not self._confirm_save_if_dirty():return False
@@ -2319,6 +2897,8 @@ class Widget(QWidget):
             self._render_nav_list()
         elif i==1:
             self._render_list()
+        elif i==2:
+            self._render_group_manager(force=True)
     def _mark_dirty(self,*a):
         self._dirty=True
         self._schedule_placeholder_scan()
@@ -2327,11 +2907,12 @@ class Widget(QWidget):
             return False
         try:
             name=_norm(self.in_name.text())
+            group_name=_norm(self.in_group.text())
             body=_norm(self.edit.toPlainText())
-            if not name and not body:
+            if not name and not group_name and not body:
                 self._dirty=False
                 return False
-            sig=_sig(name,self.edit.toHtml())
+            sig=_sig(name,self.edit.toHtml(),group_name)
             if self._last_sig==sig:
                 self._dirty=False
                 return False
@@ -2839,14 +3420,13 @@ class Widget(QWidget):
         self.cmd_box.setVisible(True)
         try:le.setFocus()
         except:self.cmd_cat.setFocus()
-    def _on_note_ref(self,name):
-        nm=_norm(name)
-        if not nm:return False
-        if not self._confirm_save_if_dirty():
-            return False
-        if self.open_note_by_name(nm):
+    def _on_note_ref(self,ref):
+        note_ref=_note_refs.normalize_note_ref(ref)
+        if not _note_refs.note_ref_key(note_ref):return False
+        if self.open_note_ref(note_ref):
             return True
-        self._toast_show(f"Note not found: {nm}",2000)
+        miss=_note_refs.note_ref_name(note_ref) or str(note_ref.get("note_id",""))
+        self._toast_show(f"Note not found: {miss}",2000)
         return False
     def _on_cmd_anchor(self,href,cursor):
         action="edit" if href.startswith(_CMD_ANCHOR_EDIT) else ("delete" if href.startswith(_CMD_ANCHOR_DEL) else "")
@@ -2894,27 +3474,26 @@ class Widget(QWidget):
         self._dirty=True
         try:self.edit.setFocus()
         except:pass
-    def _note_link_names(self):
-        try:rows=_load_notes(self._dbp)
-        except Exception:rows=[]
-        return [_norm(n.get("note_name","")) for n in rows if _norm(n.get("note_name",""))]
+    def _note_link_notes(self):
+        try:return _note_refs.list_note_refs(self._dbp)
+        except Exception:return []
     def _add_note_link(self):
         cur=self.edit.textCursor()
         sel=cur.selectedText().replace("\u2029","\n").strip()
         if "\n" in sel:sel=" ".join([s.strip() for s in sel.splitlines() if s.strip()])
-        notes=self._note_link_names()
+        notes=self._note_link_notes()
         dlg=_NoteLinkDlg(self,notes,sel,"",_NOTE_LINK_COLOR_DEFAULT)
         if dlg.exec()!=QDialog.DialogCode.Accepted:return
         vals=dlg.vals()
         if not isinstance(vals,dict):return
-        note=vals.get("note","");title=vals.get("title","");color=vals.get("color","")
+        note={"note_id":vals.get("note_id"),"note_name":vals.get("note_name",vals.get("note",""))};title=vals.get("title","");color=vals.get("color","")
         if self.edit.insert_note_link(note,title,color,cur):
             try:self.edit.setFocus()
             except Exception:pass
     def _edit_note_link_dialog(self,data):
-        notes=self._note_link_names()
+        notes=self._note_link_notes()
         title=(str(data.get("title","")) if isinstance(data,dict) else "").replace("\r","\n").replace("\n"," ").strip()
-        note=_norm(data.get("note","")) if isinstance(data,dict) else ""
+        note=_note_refs.note_ref_name(data) if isinstance(data,dict) else ""
         color=data.get("color","") if isinstance(data,dict) else ""
         dlg=_NoteLinkDlg(self,notes,title,note,color)
         if dlg.exec()!=QDialog.DialogCode.Accepted:return None
@@ -2981,18 +3560,25 @@ class Widget(QWidget):
     def _load_into_editor(self,n):
         self._cmd_box_hide()
         name=(n.get("note_name","") or "").strip()
+        group_name=_norm(n.get("group_name",""))
         htmls=n.get("content","") or ""
         self._note_id=n.get("id",None);self._orig_name=name
         self.in_name.setText(name)
+        self._refresh_editor_group_options()
+        try:self.in_group.setText(group_name)
+        except Exception:pass
         self.edit.blockSignals(True)
         self.edit.setHtml(htmls)
         has_c=("<C [" in htmls) or ("<c [" in htmls) or ("&lt;C [" in htmls) or ("&lt;c [" in htmls)
         has_anchor=(_CMD_ANCHOR_EDIT in htmls) or (_CMD_ANCHOR_DEL in htmls)
         if has_c:self._convert_cmd_blocks(mark_dirty=False)
         if has_anchor:self._bind_cmd_tables_from_anchors()
+        try:self.edit.normalize_note_links(lambda ref:_note_refs.resolve_note_ref(self._dbp,ref))
+        except Exception:pass
         self.edit.blockSignals(False)
-        self._last_sig=_sig(name,htmls)
+        self._last_sig=_sig(name,htmls,group_name)
         self._dirty=False
+        self._touch_recent(n,refresh_list=False)
         self._clear_heading_format()
         self._open_create_dialog(False)
         self._schedule_placeholder_scan()
@@ -3021,14 +3607,52 @@ class Widget(QWidget):
         except Exception:self._list_per=10
         self._list_page=1
         self._render_list()
+    def _refresh_list_group_filter(self):
+        if not hasattr(self,"list_group"):
+            return
+        groups=sorted({_norm(n.get("group_name","")) for n in self._notes_cache if _norm(n.get("group_name",""))},key=lambda s:s.lower())
+        current=self.list_group.currentData()
+        self.list_group.blockSignals(True)
+        self.list_group.clear()
+        self.list_group.addItem("All Groups","*")
+        self.list_group.addItem("Ungrouped","")
+        for g in groups:
+            self.list_group.addItem(g,g)
+        idx=0
+        for i in range(self.list_group.count()):
+            if self.list_group.itemData(i)==current:
+                idx=i;break
+        self.list_group.setCurrentIndex(idx)
+        self.list_group.blockSignals(False)
     def _save_notes_meta(self):
-        try:_save_notes_meta(self._pinned,self._recent)
+        try:_save_notes_meta(self._pinned,self._recent,self._group_meta,self._nav_collapsed_groups)
         except Exception:pass
-    def _prune_meta(self,names_set):
+    def _row_note_ref(self,row):
+        if not isinstance(row,dict):return {}
+        return _note_refs.serialize_note_ref(note_id=row.get("id"),note_name=row.get("note_name",""))
+    def _meta_key(self,ref):
+        return _note_refs.note_ref_key(ref)
+    def _resolve_meta_ref(self,ref):
+        key=_note_refs.note_ref_key(ref)
+        if not key:return None
+        rid=_note_refs.note_ref_id(ref)
+        if rid is not None:
+            for row in self._notes_cache:
+                try:
+                    if int(row.get("id"))==rid:return self._row_note_ref(row)
+                except Exception:
+                    continue
+        name=_note_refs.note_ref_name(ref)
+        if name:
+            for row in self._notes_cache:
+                if _kci(row.get("note_name",""))==_kci(name):
+                    return self._row_note_ref(row)
+        return None
+    def _prune_meta(self):
         before_p=list(self._pinned)
         before_r=list(self._recent)
-        self._pinned=[x for x in self._pinned if _kci(x) in names_set]
-        self._recent=[x for x in self._recent if _kci(x) in names_set]
+        self._pinned=_note_refs.dedupe_note_refs([r for r in (self._resolve_meta_ref(x) for x in self._pinned) if r])
+        self._recent=_note_refs.dedupe_note_refs([r for r in (self._resolve_meta_ref(x) for x in self._recent) if r])
         if before_p!=self._pinned or before_r!=self._recent:self._save_notes_meta()
     def _clear_layout(self,lay):
         try:
@@ -3040,55 +3664,87 @@ class Widget(QWidget):
             pass
     def _render_quick_notes(self):
         return
-    def _touch_recent(self,name,refresh_list=True):
-        return
-    def _toggle_pin(self,name):
-        nm=_norm(name)
-        if not nm:return
-        k=_kci(nm)
-        if k in {_kci(x) for x in self._pinned}:
-            self._pinned=[x for x in self._pinned if _kci(x)!=k]
+    def _touch_recent(self,note,refresh_list=True):
+        ref=self._resolve_meta_ref(note)
+        if not ref:
+            ref=_note_refs.serialize_note_ref(note)
+        key=self._meta_key(ref)
+        if not key:return
+        self._recent=[x for x in self._recent if self._meta_key(x)!=key]
+        self._recent.insert(0,ref)
+        self._recent=_note_refs.dedupe_note_refs(self._recent[:20])
+        self._save_notes_meta()
+        if refresh_list:
+            self._render_quick_notes()
+    def _toggle_pin(self,note):
+        ref=self._resolve_meta_ref(note)
+        if not ref:
+            ref=_note_refs.serialize_note_ref(note)
+        key=self._meta_key(ref)
+        if not key:return
+        if key in {self._meta_key(x) for x in self._pinned}:
+            self._pinned=[x for x in self._pinned if self._meta_key(x)!=key]
         else:
-            self._pinned.insert(0,nm)
-        self._pinned=_dedupe_ci(self._pinned)
+            self._pinned.insert(0,ref)
+        self._pinned=_note_refs.dedupe_note_refs(self._pinned)
         self._save_notes_meta()
         self._render_quick_notes()
         self._render_list()
-    def _rename_note_meta(self,old_name,new_name):
-        o=_norm(old_name);n=_norm(new_name)
-        if not o or not n or _kci(o)==_kci(n):return
-        self._pinned=[n if _kci(x)==_kci(o) else x for x in self._pinned]
-        self._recent=[n if _kci(x)==_kci(o) else x for x in self._recent]
-        self._pinned=_dedupe_ci(self._pinned)
-        self._recent=_dedupe_ci(self._recent)
+    def _rename_note_meta(self,old_name,new_note):
+        new_ref=_note_refs.serialize_note_ref(new_note)
+        old=_norm(old_name)
+        if not old or not _note_refs.note_ref_key(new_ref):return
+        nid=_note_refs.note_ref_id(new_ref)
+        def _swap(items):
+            out=[]
+            for item in items:
+                item_id=_note_refs.note_ref_id(item)
+                item_name=_note_refs.note_ref_name(item)
+                if (nid is not None and item_id==nid) or _kci(item_name)==_kci(old):
+                    out.append(new_ref)
+                else:
+                    out.append(item)
+            return _note_refs.dedupe_note_refs(out)
+        self._pinned=_swap(self._pinned)
+        self._recent=_swap(self._recent)
         self._save_notes_meta()
         self._render_quick_notes()
-    def _remove_note_meta(self,name):
-        nm=_norm(name)
-        if not nm:return
-        self._pinned=[x for x in self._pinned if _kci(x)!=_kci(nm)]
-        self._recent=[x for x in self._recent if _kci(x)!=_kci(nm)]
+    def _remove_note_meta(self,note):
+        ref=_note_refs.serialize_note_ref(note)
+        key=self._meta_key(ref)
+        if not key:return
+        self._pinned=[x for x in self._pinned if self._meta_key(x)!=key]
+        self._recent=[x for x in self._recent if self._meta_key(x)!=key]
         self._save_notes_meta()
         self._render_quick_notes()
     def _render_list(self):
         try:self._notes_cache=_load_notes(self._dbp)
         except Exception:self._notes_cache=[]
-        names_set={_kci(n.get("note_name","")) for n in self._notes_cache if _norm(n.get("note_name",""))}
-        self._prune_meta(names_set)
+        self._prune_meta()
+        self._sync_group_meta_with_notes()
+        self._refresh_list_group_filter()
         q=_norm(self.list_search.text()).lower()
+        group_filter=self.list_group.currentData() if hasattr(self,"list_group") else "*"
         rows=[]
         for n in self._notes_cache:
-            nm=(n.get("note_name","") or "");up=(n.get("updated_at","") or "")
-            if q and q not in (nm+" "+up).lower():continue
+            nm=(n.get("note_name","") or "");up=(n.get("updated_at","") or "");grp=_norm(n.get("group_name",""))
+            if group_filter=="*" or group_filter is None:
+                pass
+            elif group_filter=="":
+                if grp:continue
+            elif _kci(grp)!=_kci(group_filter):
+                continue
+            if q and q not in (nm+" "+grp+" "+up).lower():continue
             rows.append(n)
-        pin_set={_kci(x) for x in self._pinned}
-        pin_index={_kci(x):i for i,x in enumerate(self._pinned)}
+        pin_set={self._meta_key(x) for x in self._pinned}
+        pin_index={self._meta_key(x):i for i,x in enumerate(self._pinned)}
         pinned=[];rest=[]
         for n in rows:
-            nm=_kci(n.get("note_name",""))
-            if nm in pin_set:pinned.append(n)
+            ref_key=self._meta_key(self._row_note_ref(n))
+            if ref_key in pin_set:pinned.append(n)
             else:rest.append(n)
-        pinned.sort(key=lambda n:pin_index.get(_kci(n.get("note_name","")),9999))
+        pinned.sort(key=lambda n:pin_index.get(self._meta_key(self._row_note_ref(n)),9999))
+        rest.sort(key=lambda n:(_group_sort_key(n.get("group_name","")),_kci(n.get("note_name",""))))
         rows=pinned+rest
         self._list_view=rows
         tot=len(self._list_view);pg=self._list_pages()
@@ -3100,7 +3756,8 @@ class Widget(QWidget):
         self.list_tbl.setRowCount(len(rows))
         for r,n in enumerate(rows):
             note_name=(n.get("note_name","") or "").strip()
-            is_pin=_kci(note_name) in pin_set
+            group_name=_norm(n.get("group_name",""))
+            is_pin=self._meta_key(self._row_note_ref(n)) in pin_set
             pin=QTableWidgetItem("");pin.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);pin.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             ico=_abs("..","Assets","Fav_selected.png" if is_pin else "Fav.png")
             if os.path.isfile(ico):pin.setIcon(QIcon(ico))
@@ -3108,11 +3765,12 @@ class Widget(QWidget):
             pin.setToolTip("Pinned" if is_pin else "Pin")
             nm=QTableWidgetItem(note_name);nm.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);nm.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
             fn=nm.font();fn.setBold(True);fn.setWeight(800);nm.setFont(fn);nm.setData(Qt.ItemDataRole.UserRole,n)
+            gp=QTableWidgetItem(_group_label(group_name));gp.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);gp.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             up=QTableWidgetItem(_fmt_note_time(n.get("updated_at","")));up.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);up.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             ed=QTableWidgetItem("#");ed.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ed.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             xd=QTableWidgetItem("X");xd.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);xd.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             fe=ed.font();fe.setBold(True);fe.setWeight(800);ed.setFont(fe);xd.setFont(fe)
-            self.list_tbl.setItem(r,0,pin);self.list_tbl.setItem(r,1,nm);self.list_tbl.setItem(r,2,up);self.list_tbl.setItem(r,3,ed);self.list_tbl.setItem(r,4,xd)
+            self.list_tbl.setItem(r,0,pin);self.list_tbl.setItem(r,1,nm);self.list_tbl.setItem(r,2,gp);self.list_tbl.setItem(r,3,up);self.list_tbl.setItem(r,4,ed);self.list_tbl.setItem(r,5,xd)
             self.list_tbl.setRowHeight(r,44)
         self.list_tbl.clearSelection()
         try:self._render_quick_notes()
@@ -3126,23 +3784,24 @@ class Widget(QWidget):
         n=self._row_note(row)
         if not n:return
         if col==0:
-            name=(n.get("note_name","") or "").strip()
-            return self._toggle_pin(name)
-        if col in (1,2,3):
+            return self._toggle_pin(n)
+        if col in (1,2,3,4):
             if not self._confirm_save_if_dirty():return
             return self._load_into_editor(n)
-        if col==4:
+        if col==5:
             w=self.window() if self.window() else self
             name=(n.get("note_name","") or "").strip()
-            if QMessageBox.question(w,"Delete",f"Delete note: {name}?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
+            if QMessageBox.question(w,"Recycle Bin",f"Move note to Recycle Bin?\n\n{name}",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
             ok=_delete_note(self._dbp,name)
             if ok:
-                self._remove_note_meta(name)
+                self._remove_note_meta(n)
                 self._render_list()
                 try:self._render_nav_list(force=True)
                 except Exception:pass
-                _log("[+]",f"Deleted note: {name}")
-            else:QMessageBox.critical(w,"Error","Failed to delete note.")
+                try:self._render_group_manager(force=True)
+                except Exception:pass
+                _log("[+]",f"Moved note to Recycle Bin: {name}")
+            else:QMessageBox.critical(w,"Error","Failed to move note to Recycle Bin.")
     def _on_list_double(self,row,col):
         n=self._row_note(row)
         if n:
@@ -3155,10 +3814,13 @@ class Widget(QWidget):
         try:
             prev_name=_norm(self._orig_name)
             name=_norm(self.in_name.text())
+            group_name=_norm(self.in_group.text())
             if not name:
                 w=self.window() if self.window() else self
                 QMessageBox.warning(w,"Missing","Note Name is required.")
                 return False
+            try:self.edit.normalize_note_links(lambda ref:_note_refs.resolve_note_ref(self._dbp,ref))
+            except Exception:pass
             htmls=self.edit.toHtml()
             plain=self.edit.toPlainText()
             cmds=self._extract_cmds_from_doc()
@@ -3168,7 +3830,7 @@ class Widget(QWidget):
                 w=self.window() if self.window() else self
                 QMessageBox.warning(w,"Missing","Note area is empty.")
                 return False
-            sig=_sig(name,htmls)
+            sig=_sig(name,htmls,group_name)
             if self._last_sig==sig and not self._dirty:
                 self._toast_show("Already saved",1500)
                 _log("[*]",f"Save skipped (already saved): {name}")
@@ -3179,24 +3841,24 @@ class Widget(QWidget):
                 _ensure_schema(con);_ensure_cmd_schema(con)
                 cur=con.cursor()
                 if self._note_id:
-                    cur.execute("UPDATE Notes SET note_name=?,content=?,updated_at=? WHERE id=?",(name,htmls,now,int(self._note_id)))
+                    cur.execute("UPDATE Notes SET note_name=?,group_name=?,content=?,updated_at=? WHERE id=?",(name,group_name,htmls,now,int(self._note_id)))
                     nid=int(self._note_id)
                     action="update"
                 else:
                     cur.execute("SELECT id FROM Notes WHERE note_name=?",(name,))
                     exists=cur.fetchone()
-                    cur.execute("INSERT INTO Notes(note_name,content,created_at,updated_at) VALUES(?,?,?,?) ON CONFLICT(note_name) DO UPDATE SET content=excluded.content,updated_at=excluded.updated_at",(name,htmls,now,now))
+                    cur.execute("INSERT INTO Notes(note_name,group_name,content,created_at,updated_at) VALUES(?,?,?,?,?) ON CONFLICT(note_name) DO UPDATE SET group_name=excluded.group_name,content=excluded.content,updated_at=excluded.updated_at",(name,group_name,htmls,now,now))
                     cur.execute("SELECT id FROM Notes WHERE note_name=?",(name,));r=cur.fetchone()
                     nid=int(r[0]) if r else None
                     self._note_id=nid
                     action="update" if exists else "insert"
-                _insert_note_history(cur,nid,name,htmls,action,now)
+                _insert_note_history(cur,nid,name,group_name,htmls,action,now)
                 ncmd=_sync_commands(con,nid,name,cmds,now) if nid else 0
             self._orig_name=name
             self._last_sig=sig
             self._dirty=False
             try:
-                if prev_name and _kci(prev_name)!=_kci(name):self._rename_note_meta(prev_name,name)
+                if prev_name and _kci(prev_name)!=_kci(name):self._rename_note_meta(prev_name,{"note_id":nid,"note_name":name})
             except Exception:
                 pass
             try:
@@ -3215,6 +3877,8 @@ class Widget(QWidget):
             except:pass
             try:self._render_nav_list(force=True)
             except Exception:pass
+            try:self._render_group_manager(force=True)
+            except Exception:pass
             self._toast_show(f"Saved ({ncmd})",2000)
             if reset_after:QTimer.singleShot(2000,self._new_note)
             _log("[+]",f"Saved note: {name} cmds={ncmd}")
@@ -3227,15 +3891,23 @@ class Widget(QWidget):
         finally:
             self._saving=False
             self.btn_save.setEnabled(True);self.btn_clear.setEnabled(True);self.btn_add.setEnabled(True)
-    def open_note_by_name(self,name):
-        nm=_norm(name)
-        if not nm:return False
-        if not self._confirm_save_if_dirty():
+    def open_note_ref(self,ref=None,note_id=None,note_name=""):
+        note_ref=_note_refs.normalize_note_ref(ref,note_id=note_id,note_name=note_name)
+        if not _note_refs.note_ref_key(note_ref):
             return False
         try:
             self._notes_cache=_load_notes(self._dbp)
         except Exception:
             self._notes_cache=[]
+        target_id=_note_refs.note_ref_id(note_ref)
+        if target_id is not None:
+            for n in self._notes_cache:
+                try:
+                    if int(n.get("id"))==target_id:
+                        return self._open_note_in_nav(n)
+                except Exception:
+                    continue
+        nm=_note_refs.note_ref_name(note_ref)
         for n in self._notes_cache:
             if _norm(n.get("note_name","")).lower()==nm.lower():
                 try:
@@ -3243,22 +3915,10 @@ class Widget(QWidget):
                 except Exception:
                     return False
         return False
+    def open_note_by_name(self,name):
+        return self.open_note_ref(note_name=name)
     def open_note_by_id(self,nid):
-        try:tid=int(nid)
-        except Exception:return False
-        if not self._confirm_save_if_dirty():
-            return False
-        try:
-            self._notes_cache=_load_notes(self._dbp)
-        except Exception:
-            self._notes_cache=[]
-        for n in self._notes_cache:
-            try:
-                if int(n.get("id"))==tid:
-                    return self._open_note_in_nav(n)
-            except Exception:
-                continue
-        return False
+        return self.open_note_ref(note_id=nid)
     def create_note_prefill(self,name="",content=""):
         if not self._confirm_save_if_dirty():
             return False

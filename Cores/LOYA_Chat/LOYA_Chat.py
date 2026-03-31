@@ -1,9 +1,15 @@
-import os,json,logging,importlib.util,hashlib,re,sqlite3,textwrap
+import os,sys,subprocess,json,logging,importlib.util,hashlib,re,sqlite3,textwrap
 from datetime import datetime,timezone
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QTimer,pyqtSignal
 from PyQt6.QtGui import QTextCursor,QColor,QTextCharFormat,QSyntaxHighlighter,QFontMetricsF,QGuiApplication
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QFrame,QPlainTextEdit,QLabel,QHBoxLayout,QToolButton
+from PyQt6.QtWidgets import QApplication,QWidget,QVBoxLayout,QFrame,QPlainTextEdit,QLabel,QHBoxLayout,QToolButton
+from Cores import note_refs as _note_refs
+from Cores.Update import OFFICIAL_SOURCE_REPO as _UP_REPO_URL
+from Cores.Update import check_for_updates as _check_for_updates
+from Cores.Update import compare_semver as _compare_update_versions
+from Cores.Update import get_update_state as _get_update_state
+from Cores.Update import start_update_install as _start_update_install
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _root_abs(*p):return os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)),"..","..",*p))
 def _log_setup():
@@ -45,7 +51,7 @@ def _load_commands(data):
     low={c.lower() for c in out}
     if "clear" not in low:out.append("clear")
     if "search" not in low:out.append("search")
-    for k in ("history","open","use","add","select","back","exit","reset"):
+    for k in ("history","open","use","add","select","back","exit","reset","update"):
         if k not in low:out.append(k)
     return out
 _LOGICS_MOD=None
@@ -83,6 +89,8 @@ def _history_path():
     return _root_abs("Data","LOYA_Chat_history.json")
 def _saved_searches_path():
     return _root_abs("Data","LOYA_Chat_saved_searches.json")
+def _recent_searches_path():
+    return _root_abs("Data","LOYA_Chat_recent_searches.json")
 def _db_path():
     return _root_abs("Data","Note_LOYA_V1.db")
 def _read_json(p,default):
@@ -331,7 +339,9 @@ class Widget(QWidget):
         self._default_limits={"notes":10,"commands":10,"targets":10,"targets_value":10}
         self._last_search=None
         self._saved_searches=self._load_saved_searches()
-        self._suggest_cache={"targets":[],"categories":[],"tags":[]}
+        self._recent_searches=self._load_recent_searches()
+        self._pending_confirm=None
+        self._suggest_cache={"targets":[],"categories":[],"tags":[],"groups":[]}
         self._suggest_cache_mtime={"targets":None,"db":None}
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         frame=QFrame(self);root.addWidget(frame,1)
@@ -461,11 +471,12 @@ class Widget(QWidget):
         return True
     def _tab_complete_filter_value(self,raw):
         if not re.match(r"^\s*search\b",raw,re.I):return False
-        info=self._extract_filter_prefix(raw,("target_name","category","tags"))
+        info=self._extract_filter_prefix(raw,("target_name","group","category","tags"))
         if not info:return False
         key=info["key"]
         prefix=info["prefix"]
         if key=="target_name":items=self._match_prefix(self._get_target_names(),prefix)
+        elif key=="group":items=self._match_prefix(self._get_groups(),prefix)
         elif key=="category":items=self._match_prefix(self._get_categories(),prefix)
         elif key=="tags":items=self._match_prefix(self._get_tags(),prefix)
         else:items=[]
@@ -476,7 +487,7 @@ class Widget(QWidget):
             self._hide_suggest()
             return True
         if len(items)>1:
-            label="targets" if key=="target_name" else ("categories" if key=="category" else "tags")
+            label="targets" if key=="target_name" else ("groups" if key=="group" else ("categories" if key=="category" else "tags"))
             self._show_suggest(label,items,raw)
             return True
         self._hide_suggest()
@@ -585,6 +596,169 @@ class Widget(QWidget):
         return out
     def _save_saved_searches(self):
         return _write_json(_saved_searches_path(),self._saved_searches or {})
+    def _load_recent_searches(self):
+        data=_read_json(_recent_searches_path(),[])
+        if not isinstance(data,list):return []
+        out=[];seen=set()
+        for it in data:
+            if not isinstance(it,dict):continue
+            q=_norm(it.get("query",""))
+            if not q:continue
+            sig=_kci(q)
+            if sig in seen:continue
+            seen.add(sig)
+            out.append({"query":q,"scope":_norm(it.get("scope","")),"at":_norm(it.get("at","")),"total":self._safe_int(it.get("total",0),0),"shown":self._safe_int(it.get("shown",0),0)})
+        return out[:20]
+    def _save_recent_searches(self):
+        return _write_json(_recent_searches_path(),self._recent_searches[:20] if isinstance(self._recent_searches,list) else [])
+    def _remember_recent_search(self,query,reply):
+        if not isinstance(reply,dict):return
+        q=_norm(query)
+        scope=_norm(reply.get("scope",""))
+        if not q or not re.match(r"^\s*search\b",q,re.I) or scope not in ("notes","commands","targets","targets_value"):return
+        entry={"query":q,"scope":scope,"at":_now(),"total":self._safe_int(reply.get("total",0),0),"shown":self._safe_int(reply.get("shown",0),0)}
+        rows=[entry]
+        for it in (self._recent_searches or []):
+            if _kci(it.get("query",""))==_kci(q):continue
+            rows.append({"query":_norm(it.get("query","")),"scope":_norm(it.get("scope","")),"at":_norm(it.get("at","")),"total":self._safe_int(it.get("total",0),0),"shown":self._safe_int(it.get("shown",0),0)})
+        self._recent_searches=rows[:20]
+        self._save_recent_searches()
+    def _recent_search_lines(self,limit=10):
+        rows=self._recent_searches or []
+        if not rows:return "No recent searches."
+        use=rows[:max(1,int(limit or 10))]
+        lines=[f"Recent searches: {len(rows)}"]
+        for i,it in enumerate(use,1):
+            stamp=_norm(it.get("at","")).replace("T"," ")[:16]
+            scope=_norm(it.get("scope","")) or "search"
+            total=self._safe_int(it.get("total",0),0)
+            lines.append(f"{i}. [{scope}] {stamp} | total={total} | {_norm(it.get('query',''))}")
+        if len(rows)>len(use):lines.append(f"... {len(rows)-len(use)} more")
+        return "\n".join(lines)
+    def _recent_search_query(self,ref):
+        key=_norm(ref)
+        if not key:return ""
+        if key.isdigit():
+            idx=int(key)-1
+            if 0<=idx<len(self._recent_searches or []):return _norm(self._recent_searches[idx].get("query",""))
+        for it in (self._recent_searches or []):
+            q=_norm(it.get("query",""))
+            if q==key or _kci(q)==_kci(key):return q
+        return ""
+    def _update_status_text(self,state):
+        st=state if isinstance(state,dict) else {}
+        cur=_norm(st.get("current_version",""))
+        latest=_norm(st.get("last_available_version",""))
+        pending=_norm(st.get("pending_version",""))
+        err=_norm(st.get("last_error",""))
+        if err:return "Error: "+err
+        if st.get("update_in_progress"):
+            if pending and cur and pending==cur:return f"Installed update {pending}. Waiting for first successful launch confirmation."
+            return f"Update in progress to {pending or latest or '?'}."
+        if pending:return f"Pending update detected for {pending}."
+        if cur and latest:
+            try:
+                cmpv=_compare_update_versions(latest,cur)
+                if cmpv>0:return f"New version available: {latest}."
+                if cmpv==0:return "You are on the latest version."
+            except Exception:
+                pass
+        if latest:return f"Latest authenticated release: {latest}."
+        return "Not checked yet."
+    def _update_summary_lines(self,state,headline=""):
+        st=state if isinstance(state,dict) else _get_update_state()
+        cur=_norm(st.get("current_version","")) or "-"
+        latest=_norm(st.get("last_available_version","")) or "-"
+        repo=_norm(st.get("source_repo","")) or _UP_REPO_URL
+        lines=[]
+        if _norm(headline):lines.append(_norm(headline))
+        lines.append(f"installed: {cur}")
+        lines.append(f"latest available: {latest}")
+        lines.append(f"source repo: {repo}")
+        lines.append(f"status: {self._update_status_text(st)}")
+        return "\n".join(lines)
+    def _set_update_confirm(self,kind,data=None):
+        self._pending_confirm={"kind":_norm(kind),"data":(data if isinstance(data,dict) else {})}
+    def _handle_pending_confirm(self,clean):
+        pending=self._pending_confirm if isinstance(self._pending_confirm,dict) else None
+        if not pending:return None
+        low=_kci(clean)
+        if low in ("y","yes"):
+            self._pending_confirm=None
+            if pending.get("kind")=="update_install":return True,self._start_update_now()
+            return True,"No pending action."
+        if low in ("n","no","cancel"):
+            self._pending_confirm=None
+            return True,"Update canceled."
+        if low.startswith("update"):return None
+        return True,"Update confirmation pending. Answer Y or N."
+    def _run_update_check(self,timeout=10):
+        try:return _check_for_updates(timeout=timeout)
+        except Exception as e:return {"ok":False,"state":_get_update_state(),"manifest":None,"update_available":False,"error":str(e)}
+    def _check_update_ready(self,check_if_missing=True):
+        state=_get_update_state()
+        cur=_norm(state.get("current_version",""))
+        latest=_norm(state.get("last_available_version",""))
+        if state.get("update_in_progress"):return None,"An update is already in progress. Let it relaunch or recover first."
+        if check_if_missing and not latest:
+            out=self._run_update_check(timeout=10)
+            state=out.get("state",{}) if isinstance(out,dict) else _get_update_state()
+            cur=_norm(state.get("current_version",""))
+            latest=_norm(state.get("last_available_version",""))
+            if not out.get("ok"):return None,self._update_summary_lines(state,"Update check failed: "+_norm(out.get("error","Unknown error")))
+        if not latest:return None,self._update_summary_lines(state,"No authenticated release information is available yet.")
+        try:
+            if _compare_update_versions(latest,cur)<=0:return None,self._update_summary_lines(state,"you are currently on the latest version.")
+        except Exception:
+            return None,self._update_summary_lines(state,"Version comparison failed. Run update check again.")
+        return state,""
+    def _prompt_update_apply(self,state,headline=""):
+        st=state if isinstance(state,dict) else _get_update_state()
+        self._set_update_confirm("update_install",{"current_version":_norm(st.get("current_version","")),"latest_version":_norm(st.get("last_available_version",""))})
+        msg=headline or f"New authenticated version available: {_norm(st.get('last_available_version',''))}."
+        return self._update_summary_lines(st,msg)+"\nApply now? [Y/N]"
+    def _start_update_now(self):
+        out=self._start_update_install_now()
+        return out
+    def _start_update_install_now(self):
+        out=_start_update_install(timeout=60,parent_pid=os.getpid(),launcher_python=sys.executable,launcher_script=_root_abs("RunNote.py"))
+        state=out.get("state",{}) if isinstance(out,dict) else _get_update_state()
+        if not out.get("ok"):return self._update_summary_lines(state,"Update start failed: "+_norm(out.get("error","Unknown error")))
+        backups=out.get("backups",{}) if isinstance(out.get("backups",{}),dict) else {}
+        lines=["The authenticated package is ready. LOYA will close now, apply the update out of process, and relaunch through RunNote.py."]
+        if _norm(backups.get("data_backup","")):lines.append("data backup: "+_norm(backups.get("data_backup","")))
+        if _norm(backups.get("code_snapshot","")):lines.append("code snapshot: "+_norm(backups.get("code_snapshot","")))
+        app=QApplication.instance()
+        if app is not None:QTimer.singleShot(250,app.quit)
+        return "\n".join(lines)
+    def _open_external_path(self,path):
+        p=_norm(path)
+        if not p:return False
+        try:
+            if os.name=="nt":os.startfile(p);return True
+            if sys.platform=="darwin":subprocess.Popen(["open",p]);return True
+            subprocess.Popen(["xdg-open",p]);return True
+        except Exception:
+            return False
+    def _open_update_logs(self):
+        p=_root_abs("Logs","Update_log.log")
+        try:
+            os.makedirs(os.path.dirname(p),exist_ok=True)
+            if not os.path.isfile(p):
+                with open(p,"a",encoding="utf-8"):pass
+        except Exception:
+            pass
+        if self._open_external_path(p):return f"Opened update log.\npath: {p}"
+        return f"Open update log failed.\npath: {p}"
+    def _open_recovery_console(self):
+        try:
+            args=[sys.executable,_root_abs("RunNote.py"),"--recovery"]
+            kwargs={"cwd":_root_abs()}
+            if os.name=="nt":kwargs["creationflags"]=0x00000010|0x00000200
+            subprocess.Popen(args,**kwargs)
+            return True
+        except Exception:
+            return False
     def _help_text(self):
         items=self._questions.get("queries") if isinstance(self._questions,dict) else []
         lines=["Commands:"]
@@ -696,17 +870,27 @@ class Widget(QWidget):
         self._suggest_cache_mtime["db"]=mtime
         cats={}
         tags={}
+        groups={}
         if not os.path.isfile(p):
             self._suggest_cache["categories"]=[]
             self._suggest_cache["tags"]=[]
+            self._suggest_cache["groups"]=[]
             return
         try:
             con=sqlite3.connect(p,timeout=3)
         except Exception:
             self._suggest_cache["categories"]=[]
             self._suggest_cache["tags"]=[]
+            self._suggest_cache["groups"]=[]
             return
         try:
+            if _db_has_table(con,"Notes"):
+                cols=set(_db_table_cols(con,"Notes"))
+                if "group_name" in cols:
+                    cur=con.cursor();cur.execute("SELECT DISTINCT group_name FROM Notes")
+                    for (g,) in cur.fetchall():
+                        g=_norm(g);k=_kci(g)
+                        if g and k not in groups:groups[k]=g
             for table in ("Commands","CommandsNotes"):
                 if not _db_has_table(con,table):continue
                 cols=set(_db_table_cols(con,table))
@@ -726,12 +910,16 @@ class Widget(QWidget):
             except Exception:pass
         self._suggest_cache["categories"]=sorted(cats.values())
         self._suggest_cache["tags"]=sorted(tags.values())
+        self._suggest_cache["groups"]=sorted(groups.values())
     def _get_target_names(self):
         self._load_target_names_cache()
         return self._suggest_cache.get("targets",[])
     def _get_categories(self):
         self._load_db_cache()
         return self._suggest_cache.get("categories",[])
+    def _get_groups(self):
+        self._load_db_cache()
+        return self._suggest_cache.get("groups",[])
     def _get_tags(self):
         self._load_db_cache()
         return self._suggest_cache.get("tags",[])
@@ -927,6 +1115,7 @@ class Widget(QWidget):
     def _apply_search_state(self,query,reply):
         if not isinstance(reply,dict):
             self._clear_more_state();return
+        self._remember_recent_search(query,reply)
         remaining=self._safe_int(reply.get("remaining",0),0)
         if remaining<=0:
             self._clear_more_state();return
@@ -996,9 +1185,9 @@ class Widget(QWidget):
     def _filter_keys_for_scope(self,scope):
         base=["keyword","general","limit","date_from","date_to","has","missing"]
         if scope=="notes":
-            return base+["note_name","tags","command_keyword","category","sub_category","description_keyword","command_tittle","command_title","cmd_note_title","command"]
+            return base+["note_name","group","tags","command_keyword","category","sub_category","description_keyword","command_tittle","command_title","cmd_note_title","command"]
         if scope=="commands":
-            return base+["command_tittle","command_title","cmd_note_title","category","sub_category","description_keyword","tags","command_keyword","command"]
+            return base+["group","command_tittle","command_title","cmd_note_title","category","sub_category","description_keyword","tags","command_keyword","command"]
         if scope=="targets":
             return base+["target_name","target_value"]
         if scope=="targets_value":
@@ -1006,9 +1195,9 @@ class Widget(QWidget):
         return base
     def _common_filter_keys_for_scope(self,scope):
         if scope=="notes":
-            return ["keyword","note_name","tags","category","command_keyword","limit"]
+            return ["keyword","note_name","group","tags","category","command_keyword","limit"]
         if scope=="commands":
-            return ["keyword","command","tags","category","description_keyword","limit"]
+            return ["keyword","group","command","tags","category","description_keyword","limit"]
         if scope=="targets":
             return ["target_name","target_value","limit"]
         if scope=="targets_value":
@@ -1056,19 +1245,38 @@ class Widget(QWidget):
             try:w.on_nav(key);return True
             except Exception:pass
         return False
-    def _open_note_by_id(self,nid):
-        try:note_id=int(str(nid).strip())
-        except Exception:return False,"Invalid note id."
+    def _open_note_ref(self,note_id=None,note_name=""):
+        ref=_note_refs.normalize_note_ref(note_id=note_id,note_name=note_name)
+        if not _note_refs.note_ref_key(ref):
+            return False,"Missing note reference."
         self._nav("notes")
         w=self.window()
         page=getattr(w,"page_notes",None) if w else None
-        if page and hasattr(page,"open_note_by_id"):
+        if page and hasattr(page,"open_note_ref"):
             try:
-                page.open_note_by_id(note_id)
-                return True,f"Opened note id={note_id}."
+                if page.open_note_ref(note_id=ref.get("note_id"),note_name=ref.get("note_name","")):
+                    label=str(ref.get("note_id")) if ref.get("note_id") is not None else ref.get("note_name","")
+                    return True,f"Opened note {label}."
+                return False,"Note not found."
+            except Exception:
+                return False,"Open note failed."
+        if page and ref.get("note_id") is not None and hasattr(page,"open_note_by_id"):
+            try:
+                page.open_note_by_id(ref.get("note_id"))
+                return True,f"Opened note id={ref.get('note_id')}."
+            except Exception:
+                return False,"Open note failed."
+        if page and ref.get("note_name") and hasattr(page,"open_note_by_name"):
+            try:
+                page.open_note_by_name(ref.get("note_name",""))
+                return True,f"Opened note {ref.get('note_name','')}."
             except Exception:
                 return False,"Open note failed."
         return False,"Notes page not available."
+    def _open_note_by_id(self,nid):
+        try:note_id=int(str(nid).strip())
+        except Exception:return False,"Invalid note id."
+        return self._open_note_ref(note_id=note_id)
     def _fetch_command_item(self,cid):
         try:cid=int(str(cid).strip())
         except Exception:return None
@@ -1094,10 +1302,23 @@ class Widget(QWidget):
                 for i,c in enumerate(sel):
                     data[c]=r[i] if i<len(r) else ""
                 title=_norm(data.get("cmd_note_title","")) or _norm(data.get("note_name",""))
+                group_name=""
+                try:
+                    note_id=int(str(data.get("note_id","")).strip()) if str(data.get("note_id","")).strip() else None
+                except Exception:
+                    note_id=None
+                if note_id is not None and _db_has_table(con,"Notes"):
+                    ncols=set(_db_table_cols(con,"Notes"))
+                    if "group_name" in ncols:
+                        cur2=con.cursor()
+                        cur2.execute("SELECT group_name FROM Notes WHERE id=?",(note_id,))
+                        row2=cur2.fetchone()
+                        group_name=_norm(row2[0]) if row2 else ""
                 return {
                     "id":cid,
                     "note_id":data.get("note_id",None),
                     "note_name":data.get("note_name",""),
+                    "group_name":group_name,
                     "title":title,
                     "category":data.get("category",""),
                     "sub":data.get("sub_category",""),
@@ -1136,6 +1357,17 @@ class Widget(QWidget):
         s=_norm(text)
         if len(s)<=limit:return s
         return s[:max(0,limit-3)]+"..."
+    def _apply_target_preview(self,cmd):
+        text=_norm(cmd)
+        values=self._selected_target.get("values",{}) if isinstance(self._selected_target,dict) else {}
+        if not text or not isinstance(values,dict) or not values:return text
+        def repl(m):
+            key=_kci(m.group(1))
+            for k,v in values.items():
+                if _kci(k)==key:return _norm(v) or "{"+m.group(1)+"}"
+            return "{"+m.group(1)+"}"
+        try:return re.sub(r"\{([^{}]+)\}",repl,text)
+        except Exception:return text
     def _preview_note_by_id(self,nid):
         try:nid=int(str(nid).strip())
         except Exception:return False,"Invalid note id."
@@ -1149,7 +1381,7 @@ class Widget(QWidget):
             if not _db_has_table(con,"Notes"):return False,"Notes table not found."
             cols=set(_db_table_cols(con,"Notes"))
             if "id" not in cols:return False,"Notes table not found."
-            sel=["note_name","content","updated_at","created_at"]
+            sel=["note_name","group_name","content","updated_at","created_at"]
             sel=[c for c in sel if c in cols]
             if not sel:sel=["note_name","content"]
             cur=con.cursor()
@@ -1158,11 +1390,16 @@ class Widget(QWidget):
             if not r:return False,"Note not found."
             data={sel[i]:r[i] for i in range(len(sel))}
             name=_norm(data.get("note_name","")) or "(no name)"
+            group_name=_norm(data.get("group_name",""))
             content=_norm(data.get("content",""))
             content=re.sub(r"<[^>]+>"," ",content)
             content=re.sub(r"\\s+"," ",content).strip()
             snippet=self._ell_text(content,240)
-            return True,f"Note {nid}: {name}\n{snippet}"
+            updated=_norm(data.get("updated_at","") or data.get("created_at","")).replace("T"," ")[:19]
+            head=f"Note {nid}: {name}"
+            if group_name:head+=f"\nGroup: {group_name}"
+            if updated:head+=f"\nUpdated: {updated}"
+            return True,head+"\n"+snippet
         finally:
             try:con.close()
             except Exception:pass
@@ -1170,9 +1407,21 @@ class Widget(QWidget):
         item=self._fetch_command_item(cid)
         if not item:return False,"Command not found."
         title=_norm(item.get("title","")) or "(no title)"
-        cmd=_norm(item.get("command",""))
+        group_name=_norm(item.get("group_name",""))
+        note_name=_norm(item.get("note_name",""))
+        category=_norm(item.get("category",""))
+        sub=_norm(item.get("sub",""))
+        tags=_norm(item.get("tags",""))
+        src=_norm(item.get("src",""))
+        cmd=self._apply_target_preview(item.get("command",""))
         desc=_norm(item.get("description",""))
         lines=[f"Command {cid}: {title}"]
+        if group_name:lines.append("group: "+group_name)
+        if note_name and note_name!=title:lines.append("note: "+note_name)
+        if category or sub:lines.append("path: "+(category+" / "+sub).strip(" /"))
+        if tags:lines.append("tags: "+tags)
+        if src=="Commands":lines.append("source: linked")
+        elif src=="CommandsNotes":lines.append("source: standalone")
         if cmd:lines.append("cmd: "+self._ell_text(cmd,240))
         if desc:lines.append("desc: "+self._ell_text(desc,200))
         return True,"\n".join(lines)
@@ -1294,6 +1543,8 @@ class Widget(QWidget):
         return True,f"Target updated: {name}"
     def _handle_command(self,clean):
         low=_kci(clean)
+        pending=self._handle_pending_confirm(clean)
+        if pending is not None:return pending
         if low=="clear":
             self._update_prompt()
             self.terminal.reset()
@@ -1303,6 +1554,7 @@ class Widget(QWidget):
             self._history_idx=None
             self._history_temp=""
             self._selected_target=None
+            self._pending_confirm=None
             self._save_history()
             self._update_prompt()
             self.terminal.reset()
@@ -1315,6 +1567,32 @@ class Widget(QWidget):
             return True,"History cleared."
         if low=="history":
             return True,self._history_lines()
+        if low=="update":
+            out=self._run_update_check(timeout=10)
+            state=out.get("state",{}) if isinstance(out,dict) else _get_update_state()
+            if not out.get("ok"):return True,self._update_summary_lines(state,"Update check failed: "+_norm(out.get("error","Unknown error")))
+            if not out.get("update_available"):return True,self._update_summary_lines(state,"you are currently on the latest version.")
+            return True,self._prompt_update_apply(state)
+        if low in ("update check","check update"):
+            out=self._run_update_check(timeout=10)
+            state=out.get("state",{}) if isinstance(out,dict) else _get_update_state()
+            if not out.get("ok"):return True,self._update_summary_lines(state,"Update check failed: "+_norm(out.get("error","Unknown error")))
+            if out.get("update_available"):return True,self._update_summary_lines(state,"New authenticated version available: "+_norm(state.get("last_available_version",""))+".")
+            return True,self._update_summary_lines(state,"you are currently on the latest version.")
+        if low=="update now":
+            state,msg=self._check_update_ready(check_if_missing=True)
+            if not state:return True,msg
+            return True,self._prompt_update_apply(state)
+        if low=="update version":
+            state=_get_update_state()
+            if not _norm(state.get("last_available_version","")):
+                out=self._run_update_check(timeout=10)
+                state=out.get("state",{}) if isinstance(out,dict) else _get_update_state()
+            return True,self._update_summary_lines(state,"Update version info.")
+        if low=="update logs":
+            return True,self._open_update_logs()
+        if low in ("update rollback","update recovery","update recover"):
+            return True,("Opened recovery mode." if self._open_recovery_console() else "Open recovery mode failed.")
         if low=="help":
             return True,self._help_text()
         m=re.match(r"^help\s+(.+)$",clean,re.I)
@@ -1323,6 +1601,20 @@ class Widget(QWidget):
         if low in ("more","next"):
             if not self._last_search:return True,"No active search."
             self._on_show_more()
+            return True,None
+        if low in ("recent searches","show recent searches","search recent","searches recent"):
+            return True,self._recent_search_lines()
+        if low in ("clear recent searches","recent searches clear"):
+            self._recent_searches=[]
+            self._save_recent_searches()
+            return True,"Recent searches cleared."
+        m=re.match(r"^(run\s+recent\s+search|run\s+recent)\s+(.+)$",clean,re.I)
+        if m:
+            query=self._recent_search_query(self._strip_quotes(m.group(2)))
+            if not query:return True,"Recent search not found."
+            reply,kind=self._get_reply(query)
+            if kind=="system":self.terminal.write_system(reply)
+            else:self.terminal.write_output(reply)
             return True,None
         m=re.match(r"^save\s+search\s+(.+)$",clean,re.I)
         if m:

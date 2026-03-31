@@ -1,11 +1,21 @@
-import os,sys,importlib.util,logging,time
+import os,sys,importlib.util,logging,time,subprocess
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QSize,QPropertyAnimation,QEasingCurve,QTimer
 from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication,QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QFrame,QLabel,QStackedWidget,QSizePolicy,QToolButton
-APP_NAME="LOYA Note"
-APP_VER="3.2"
+from PyQt6.QtWidgets import QApplication,QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QFrame,QLabel,QStackedWidget,QSizePolicy,QToolButton,QMessageBox
+from Cores.Update import health_check as _health_check
+from Cores.Update import APP_NAME as _UPDATE_APP_NAME
+from Cores.Update import DEFAULT_APP_VERSION as _DEFAULT_APP_VERSION
+from Cores.Update import ensure_runtime_files as _ensure_update_runtime
+from Cores.Update import finalize_pending_update_on_launch as _finalize_pending_update_on_launch
+from Cores.Update import get_app_version as _get_app_version
+from Cores.Update import get_windows_app_id as _get_windows_app_id
+from Cores.Update import sync_installed_version as _sync_installed_version
+APP_NAME=_UPDATE_APP_NAME
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
+def _app_version():
+    try:return _get_app_version()
+    except Exception:return _DEFAULT_APP_VERSION
 def _purge_old_logs(days=30):
     try:
         d=_abs("Logs")
@@ -96,6 +106,40 @@ def _security_encrypt_on_exit():
         if callable(fn):fn()
     except Exception as e:
         _log("[!]",f"Encrypt on exit failed ({e})")
+def _console_python():
+    py=os.path.abspath(sys.executable)
+    if os.name=="nt" and py.lower().endswith("pythonw.exe"):
+        alt=py[:-5]+".exe"
+        if os.path.isfile(alt):return alt
+    return py
+def _open_recovery_mode(reason=""):
+    script=_abs("RunNote.py")
+    if not os.path.isfile(script):return False
+    cmd=[_console_python(),script,"--recovery"]
+    if reason:cmd+=["--reason",str(reason)]
+    try:
+        if os.name=="nt":subprocess.Popen(cmd,cwd=_abs(),stdin=subprocess.DEVNULL,creationflags=0x00000010)
+        else:subprocess.Popen(cmd,cwd=_abs(),stdin=subprocess.DEVNULL,start_new_session=True)
+        return True
+    except Exception as e:
+        _log("[!]",f"Recovery launcher failed ({e})")
+        return False
+def _show_health_failure(text):
+    try:
+        mb=QMessageBox()
+        mb.setIcon(QMessageBox.Icon.Critical)
+        mb.setWindowTitle("Startup Health Check")
+        mb.setText(text)
+        brec=mb.addButton("Open Recovery",QMessageBox.ButtonRole.ActionRole)
+        mb.addButton("Close",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        return mb.clickedButton()==brec
+    except Exception:
+        return False
+def _on_app_about_to_quit():
+    _security_encrypt_on_exit()
+    try:_health_check.mark_launch_completed(True)
+    except Exception as e:_log("[!]",f"Launch state completion failed ({e})")
 class NavBtn(QToolButton):
     def __init__(self,icon_path,text,parent=None):
         super().__init__(parent)
@@ -184,10 +228,11 @@ class PlaceholderPage(QWidget):
         s=QLabel(subtitle);s.setObjectName("PageSubTitle");s.setWordWrap(True)
         v.addWidget(t);v.addWidget(s);v.addStretch(1)
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self,startup_report=None):
         super().__init__()
+        self._startup_report=startup_report
         self.setObjectName("MainWindow")
-        self.setWindowTitle(f"{APP_NAME} v{APP_VER}")
+        self.setWindowTitle(f"{APP_NAME} v{_app_version()}")
         g=QApplication.primaryScreen().availableGeometry()
         min_w=min(980,max(640,int(g.width()*0.6)))
         min_h=min(620,max(420,int(g.height()*0.6)))
@@ -229,6 +274,7 @@ class MainWindow(QMainWindow):
         self.stack.addWidget(self.page_searchcopy)
         self.stack.addWidget(self.page_settings)
         self.on_nav("chat")
+        QTimer.singleShot(0,self._show_startup_notice)
         _log("[+]",f"MainWindow ready")
     def _build_chat(self):
         w=_load_widget(_abs("Cores","LOYA_Chat","LOYA_Chat.py"),"Widget")
@@ -280,6 +326,12 @@ class MainWindow(QMainWindow):
         if key=="settings":
             self._ensure_settings_loaded()
         self.stack.setCurrentIndex(m.get(key,0))
+        if key=="settings":
+            try:
+                hook=getattr(self.page_settings,"on_page_activated",None)
+                if callable(hook):hook()
+            except Exception:
+                pass
         _log("[*]",f"Nav: {key}")
     def changeEvent(self,e):
         try:
@@ -352,17 +404,32 @@ class MainWindow(QMainWindow):
         self._log_timer=QTimer(self);self._log_timer.setInterval(21600000);self._log_timer.timeout.connect(lambda:_purge_old_logs(30));self._log_timer.start();_purge_old_logs(30)
     def _start_auto_backup(self):
         QTimer.singleShot(1500,_auto_backup_if_needed)
+    def _show_startup_notice(self):
+        rep=self._startup_report
+        if not rep or not rep.has_notice():
+            return
+        if rep.warnings:
+            self.on_nav("settings")
+        try:QMessageBox.information(self,"Startup Health Check",rep.notice_text())
+        except Exception:pass
 def _set_windows_app_id():
     if not sys.platform.startswith("win"):
         return
     try:
         import ctypes
-        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(f"{APP_NAME}.{APP_VER}")
-        _log("[+]",f"AppUserModelID set: {APP_NAME}.{APP_VER}")
+        app_id=_get_windows_app_id(_app_version())
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+        _log("[+]",f"AppUserModelID set: {app_id}")
     except Exception as e:
         _log("[-]",f"AppUserModelID failed ({e})")
 def main():
-    _log("[*]",f"Start {APP_NAME} v{APP_VER}")
+    try:
+        _ensure_update_runtime()
+        _sync_installed_version()
+    except Exception as e:
+        _log("[!]",f"Update runtime init failed ({e})")
+    app_ver=_app_version()
+    _log("[*]",f"Start {APP_NAME} v{app_ver}")
     _set_windows_app_id()
     app=QApplication(sys.argv)
     app.setApplicationName(APP_NAME);app.setApplicationDisplayName(APP_NAME)
@@ -372,11 +439,41 @@ def main():
     else:_log("[-]",f"App icon missing: {ico}")
     qss=_load_qss()
     if qss:app.setStyleSheet(qss);_log("[+]",f"Theme applied")
+    startup_report=_health_check.run_health_check(after_security=False)
+    if startup_report.fatal:
+        _log("[-]",startup_report.fatal_text().replace("\n"," | "))
+        try:_health_check.mark_launch_completed(False,startup_report.fatal_text())
+        except Exception as e:_log("[!]",f"Launch failure record failed ({e})")
+        if _show_health_failure(startup_report.fatal_text()):_open_recovery_mode(startup_report.fatal_text())
+        return 8
     if not _security_unlock_if_needed(None):
         _log("[*]","Security unlock cancelled")
         sys.exit(0)
-    try:app.aboutToQuit.connect(_security_encrypt_on_exit)
+    post_security_report=_health_check.run_health_check(after_security=True)
+    startup_report.merge(post_security_report)
+    if startup_report.fatal:
+        _log("[-]",startup_report.fatal_text().replace("\n"," | "))
+        try:_health_check.mark_launch_completed(False,startup_report.fatal_text())
+        except Exception as e:_log("[!]",f"Launch failure record failed ({e})")
+        if _show_health_failure(startup_report.fatal_text()):_open_recovery_mode(startup_report.fatal_text())
+        return 8
+    try:_health_check.mark_launch_started()
+    except Exception as e:_log("[!]",f"Launch state start failed ({e})")
+    try:app.aboutToQuit.connect(_on_app_about_to_quit)
     except:pass
-    w=MainWindow();w.show();_log("[+]",f"Window shown")
+    try:
+        w=MainWindow(startup_report=startup_report);w.show();_log("[+]",f"Window shown")
+        try:
+            fin=_finalize_pending_update_on_launch(_app_version())
+            if fin.get("completed"):
+                _log("[+]",f"Update confirmed after startup: {fin.get('version','')}")
+        except Exception as e:_log("[!]",f"Update finalize after startup failed ({e})")
+    except Exception as e:
+        msg=f"Window startup failed ({e})"
+        _log("[!]",msg)
+        try:_health_check.mark_launch_completed(False,msg)
+        except Exception as state_exc:_log("[!]",f"Launch state failure record failed ({state_exc})")
+        if _show_health_failure(msg):_open_recovery_mode(msg)
+        return 9
     r=app.exec();_log("[*]",f"Exit code: {r}");sys.exit(r)
-if __name__=="__main__":main()
+if __name__=="__main__":raise SystemExit(main())

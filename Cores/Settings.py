@@ -2,9 +2,23 @@ import os,sqlite3,json,csv,zipfile,shutil,tempfile,logging,re,time,base64,hashli
 from pathlib import Path
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from PyQt6.QtCore import Qt,QTimer
+from PyQt6.QtCore import Qt,QTimer,QEvent
 from PyQt6.QtGui import QAction,QFontMetrics,QTextDocument
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QComboBox,QDialog,QFileDialog,QMessageBox,QMenu,QProgressBar,QCheckBox,QApplication,QLineEdit,QInputDialog,QScrollArea
+from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QComboBox,QDialog,QFileDialog,QMessageBox,QMenu,QProgressBar,QCheckBox,QApplication,QLineEdit,QInputDialog,QScrollArea,QGridLayout
+from Cores.Update import GITHUB_RELEASES_API_URL as _UP_MANIFEST_URL
+from Cores.Update import OFFICIAL_SOURCE_REPO as _UP_REPO_URL
+from Cores import common_db as _common_db
+from Cores import note_refs as _note_refs
+from Cores.Update import backup_restore as _update_backup
+from Cores.Update import check_for_updates as _check_for_updates
+from Cores.Update import compare_semver as _compare_update_versions
+from Cores.Update import get_app_identity as _get_app_identity
+from Cores.Update import get_update_state as _get_update_state
+from Cores.Update import list_code_snapshots as _list_code_snapshots
+from Cores.Update import old_versions_dir as _old_versions_dir
+from Cores.Update import start_update_install as _start_update_install
+from Cores.Update import health_check as _health_check
+from Cores import recycle_bin as _recycle_bin
 try:
     from cryptography.fernet import Fernet,InvalidToken
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
@@ -18,7 +32,7 @@ def _norm(s):return (str(s) if s is not None else "").replace("\x00","").strip()
 def _l(s):return _norm(s).lower()
 def _now():return datetime.utcnow().strftime("%Y-%m-%d_%H-%M-%S")
 def _log_setup():
-    d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
+    d=_health_check.logs_dir();os.makedirs(d,exist_ok=True)
     lg=logging.getLogger("Settings");lg.setLevel(logging.INFO)
     fp=os.path.abspath(os.path.join(d,"Settings_log.log"))
     for h in list(lg.handlers):
@@ -34,12 +48,12 @@ def _log(tag,msg):
     if _LOG is None:_LOG=_log_setup()
     try:_LOG.info(f"{tag} {msg}")
     except:pass
-def _data_dir():d=_abs("..","Data");os.makedirs(d,exist_ok=True);return d
-def _backups_dir():d=_abs("..","Backups");os.makedirs(d,exist_ok=True);return d
-def _db_path():return os.path.join(_data_dir(),"Note_LOYA_V1.db")
-DB_SCHEMA_VERSION=2
-def _targets_values_path():return os.path.join(_data_dir(),"target_values.json")
-def _targets_path():return os.path.join(_data_dir(),"Targets.json")
+def _data_dir():d=_health_check.data_dir();os.makedirs(d,exist_ok=True);return d
+def _backups_dir():d=_health_check.backups_dir();os.makedirs(d,exist_ok=True);return d
+def _db_path():return _common_db.db_path()
+DB_SCHEMA_VERSION=_common_db.DB_SCHEMA_VERSION
+def _targets_values_path():return _health_check.target_values_path()
+def _targets_path():return _health_check.targets_path()
 def _read_json(p,default):
     try:
         if not p or not os.path.isfile(p):return default
@@ -59,7 +73,7 @@ def _write_json(p,obj):
             if os.path.isfile(t):os.remove(t)
         except:pass
         return False
-def _settings_path():return os.path.join(_data_dir(),"settings.json")
+def _settings_path():return _health_check.settings_path()
 def _read_settings():return _read_json(_settings_path(),{})
 def _write_settings(data):return _write_json(_settings_path(),data or {})
 def _project_root():return os.path.abspath(_abs(".."))
@@ -108,6 +122,31 @@ def _save_backup_settings(cfg):
     cur.update({"auto_enabled":bool(cfg.get("auto_enabled",False)),"interval_hours":int(cfg.get("interval_hours",24)),"keep":int(cfg.get("keep",20))})
     d["backup"]=cur
     return _write_settings(d)
+def _get_update_settings():
+    d=_read_settings()
+    u=d.get("update",{}) if isinstance(d,dict) else {}
+    try:hrs=int(u.get("check_interval_hours",24))
+    except:hrs=24
+    repo=_norm(u.get("repo_url",_UP_REPO_URL)) or _UP_REPO_URL
+    manifest=_norm(u.get("manifest_url",_UP_MANIFEST_URL)) or _UP_MANIFEST_URL
+    channel=_norm(u.get("last_channel","stable")) or "stable"
+    return {"auto_enabled":bool(u.get("auto_enabled",False)),"check_interval_hours":max(1,hrs),"repo_url":_UP_REPO_URL if repo!=_UP_REPO_URL else repo,"manifest_url":_UP_MANIFEST_URL if manifest!=_UP_MANIFEST_URL else manifest,"last_checked":_norm(u.get("last_checked","")),"last_channel":channel}
+def _save_update_settings(cfg):
+    d=_read_settings()
+    if not isinstance(d,dict):d={}
+    cur=d.get("update",{}) if isinstance(d.get("update",{}),dict) else {}
+    cur.update({"auto_enabled":bool(cfg.get("auto_enabled",False)),"check_interval_hours":max(1,_to_int(cfg.get("check_interval_hours",24),24)),"repo_url":_UP_REPO_URL,"manifest_url":_UP_MANIFEST_URL,"last_checked":_norm(cfg.get("last_checked","")),"last_channel":_norm(cfg.get("last_channel","stable")) or "stable"})
+    d["update"]=cur
+    return _write_settings(d)
+def _sync_update_settings_from_state(state=None):
+    cfg=_get_update_settings()
+    st=state if isinstance(state,dict) else {}
+    cfg["repo_url"]=_UP_REPO_URL
+    cfg["manifest_url"]=_UP_MANIFEST_URL
+    if st.get("last_checked"):cfg["last_checked"]=_norm(st.get("last_checked",""))
+    if st.get("source_tag"):cfg["last_channel"]="stable"
+    _save_update_settings(cfg)
+    return cfg
 def _get_ai_eveluotion_settings():
     d=_read_settings()
     a=d.get("ai_eveluotion",{}) if isinstance(d,dict) else {}
@@ -516,11 +555,15 @@ def _sync_note_commands(cur,note_id,note_name,html_text,now,cmd_blocks=None):
         except Exception:
             pass
     return len(cmds or [])
-def _note_to_markdown(note_name,html_text):
+def _note_to_markdown(note_name,html_text,group_name=""):
     name=_norm(note_name) or "Untitled"
+    group=_norm(group_name)
     plain=_html_to_plain(html_text)
     rx=re.compile(r"<C\s*\[(.*?)\]\s*>\s*(.*?)\s*</C>",re.S|re.I)
     out=[f"# {name}",""]
+    if group:
+        out.append(f"Group: {group}")
+        out.append("")
     pos=0
     for m in rx.finditer(plain):
         pre=plain[pos:m.start()]
@@ -547,6 +590,21 @@ def _note_to_markdown(note_name,html_text):
         out.append(tail.rstrip())
         out.append("")
     return "\n".join(out).strip()+"\n"
+def _extract_md_group(body):
+    lines=(body or "").splitlines()
+    idx=0
+    while idx<len(lines) and not _norm(lines[idx]):
+        idx+=1
+    if idx>=len(lines):
+        return "",body or ""
+    m=re.match(r"^group\s*:\s*(.+)$",lines[idx],re.I)
+    if not m:
+        return "",body or ""
+    group=_norm(m.group(1))
+    lines.pop(idx)
+    if idx<len(lines) and not _norm(lines[idx]):
+        lines.pop(idx)
+    return group,"\n".join(lines)
 def _commands_notes_to_markdown(rows):
     out=["# Commands Notes",""]
     for r in rows or []:
@@ -662,6 +720,35 @@ def _fmt_size(n):
         if n<1024:return f"{n} {u}"
         n//=1024
     return f"{n} PB"
+def _fmt_mtime(ts):
+    try:return datetime.fromtimestamp(float(ts)).strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:return "-"
+def _open_path_ui(path):
+    p=_norm(path)
+    if not p:return False,""
+    try:
+        if os.name=="nt":os.startfile(p);return True,""
+        if sys.platform=="darwin":subprocess.Popen(["open",p]);return True,""
+        subprocess.Popen(["xdg-open",p]);return True,""
+    except Exception as e:
+        return False,str(e)
+def _tail_text(path,limit=180):
+    p=_norm(path)
+    if not p or not os.path.isfile(p):return ""
+    try:
+        with open(p,"r",encoding="utf-8",errors="ignore") as f:
+            lines=[_norm(x) for x in f.readlines()[-8:]]
+        lines=[x for x in lines if x]
+        if not lines:return ""
+        text=lines[-1]
+        return text if len(text)<=limit else text[:max(0,limit-3)]+"..."
+    except Exception:return ""
+def _short_mid(text,max_len=96):
+    s=_norm(text)
+    if len(s)<=max_len:return s
+    if max_len<12:return s[:max_len]
+    head=max(4,(max_len-5)//2);tail=max(4,max_len-5-head)
+    return s[:head]+" ... "+s[-tail:]
 def _progress(owner,title,subtitle):
     d=QDialog(owner);d.setObjectName("ProgressDialog");d.setWindowTitle(title);d.setModal(True);d.resize(520,140)
     v=QVBoxLayout(d);v.setContentsMargins(14,14,14,14);v.setSpacing(10)
@@ -678,40 +765,7 @@ def _set_prog(d,pct,msg=""):
     try:QApplication.processEvents()
     except:pass
 def _apply_migrations(con):
-    try:cur=con.cursor()
-    except:return
-    try:
-        cur.execute("PRAGMA user_version")
-        row=cur.fetchone()
-        ver=int(row[0]) if row and str(row[0]).isdigit() else 0
-    except:ver=0
-    now=datetime.utcnow().isoformat()
-    try:cur.execute("CREATE TABLE IF NOT EXISTS SchemaMigrations(version INTEGER PRIMARY KEY,applied_at TEXT)")
-    except:pass
-    if ver<1:
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(1,?)",(now,))
-        except:pass
-        ver=1
-    if ver<2:
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS NotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,content TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_hist_note_id ON NotesHistory(note_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_hist_cmd_id ON CommandsNotesHistory(cmd_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_hist_cmd_id ON CommandsHistory(cmd_id)")
-        except:pass
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(2,?)",(now,))
-        except:pass
-        ver=2
-    try:cur.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
-    except:pass
-    try:con.commit()
-    except:pass
+    _common_db.apply_migrations(con)
 class Note_LOYA_Database:
     def __init__(self,path=None):self.path=path or _db_path()
     def exists(self):return os.path.isfile(self.path)
@@ -719,21 +773,11 @@ class Note_LOYA_Database:
         os.makedirs(os.path.dirname(self.path),exist_ok=True)
         return sqlite3.connect(self.path)
     def ensure(self):
-        con=self.connect();cur=con.cursor()
-        cur.execute("CREATE TABLE IF NOT EXISTS Notes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,content TEXT,created_at TEXT,updated_at TEXT)")
-        try:cur.execute("CREATE UNIQUE INDEX IF NOT EXISTS uq_notes_name ON Notes(note_name)")
-        except:pass
-        cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,created_at TEXT,updated_at TEXT)")
-        cur.execute("CREATE TABLE IF NOT EXISTS Commands(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,created_at TEXT,updated_at TEXT)")
+        con=self.connect()
         try:
-            cur.execute("PRAGMA table_info(Commands)")
-            cols=[r[1] for r in cur.fetchall()]
-            if "note_id" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN note_id INTEGER")
-            if "cmd_note_title" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN cmd_note_title TEXT")
-            if "description" not in cols:cur.execute("ALTER TABLE Commands ADD COLUMN description TEXT")
-        except:pass
-        _apply_migrations(con)
-        con.commit();con.close()
+            _common_db.ensure_schema(con)
+        finally:
+            con.close()
     def list_tables(self):
         if not self.exists():return []
         con=self.connect();cur=con.cursor()
@@ -765,16 +809,59 @@ class Note_LOYA_Database:
         else:rows=[_norm(r[0]) for r in cur.fetchall()]
         con.close()
         return [r for r in rows if r]
-    def read_note_by_name(self,name):
+    def list_note_refs(self):
         self.ensure()
         con=self.connect();cur=con.cursor()
+        cols=set(self.table_cols("Notes"))
+        if "group_name" in cols:
+            sel="id,note_name,group_name"
+        else:
+            sel="id,note_name"
         try:
-            cur.execute("SELECT note_name,content FROM Notes WHERE note_name=?",(name,))
+            cur.execute(f"SELECT {sel} FROM Notes ORDER BY note_name COLLATE NOCASE")
+            rows=cur.fetchall()
+        except Exception:
+            rows=[]
+        con.close()
+        out=[]
+        for r in rows:
+            ref={"note_id":int(r[0]),"note_name":_norm(r[1])}
+            if "group_name" in cols:ref["group_name"]=_norm(r[2])
+            if ref["note_name"]:out.append(ref)
+        return out
+    def read_note_by_id(self,note_id):
+        self.ensure()
+        try:nid=int(str(note_id).strip())
+        except Exception:return None
+        con=self.connect();cur=con.cursor()
+        try:
+            cols=set(self.table_cols("Notes"))
+            sel="id,note_name"+(",group_name" if "group_name" in cols else "")+",content"
+            cur.execute(f"SELECT {sel} FROM Notes WHERE id=?",(nid,))
             r=cur.fetchone()
         except:r=None
         con.close()
         if not r:return None
-        return {"note_name":r[0] or "","content":r[1] or ""}
+        if "group_name" in cols:
+            return {"id":int(r[0]),"note_name":r[1] or "","group_name":r[2] or "","content":r[3] or ""}
+        return {"id":int(r[0]),"note_name":r[1] or "","group_name":"","content":r[2] or ""}
+    def read_note_by_name(self,name):
+        self.ensure()
+        con=self.connect();cur=con.cursor()
+        try:
+            cols=set(self.table_cols("Notes"))
+            sel="note_name"+(",group_name" if "group_name" in cols else "")+",content"
+            cur.execute(f"SELECT {sel} FROM Notes WHERE note_name=?",(name,))
+            r=cur.fetchone()
+        except:r=None
+        con.close()
+        if not r:return None
+        if "group_name" in cols:
+            return {"note_name":r[0] or "","group_name":r[1] or "","content":r[2] or ""}
+        return {"note_name":r[0] or "","group_name":"","content":r[1] or ""}
+    def resolve_note_ref(self,note_id=None,note_name=""):
+        self.ensure()
+        return _note_refs.resolve_note_ref(self.path,note_id=note_id,note_name=note_name)
     def sync_commands_from_notes(self,names=None,progress=None):
         self.ensure()
         con=self.connect();cur=con.cursor()
@@ -839,7 +926,8 @@ class Note_LOYA_Database:
     def export_markdown_zip(self,out_zip,progress=None):
         self.ensure()
         con=self.connect();con.row_factory=sqlite3.Row;cur=con.cursor()
-        cur.execute("SELECT id,note_name,content FROM Notes ORDER BY id ASC")
+        cols=set(self.table_cols("Notes"))
+        cur.execute("SELECT id,note_name"+(",group_name" if "group_name" in cols else "")+",content FROM Notes ORDER BY id ASC")
         notes=[dict(r) for r in cur.fetchall()]
         cur.execute("SELECT note_name,category,sub_category,command,tags,description FROM CommandsNotes ORDER BY id ASC")
         cmd_notes=[dict(r) for r in cur.fetchall()]
@@ -856,8 +944,10 @@ class Note_LOYA_Database:
                     name=f"{base}_{suffix}"
                     suffix+=1
                 used.add(name.lower())
-                md=_note_to_markdown(n.get("note_name",""),n.get("content",""))
-                z.writestr(f"Notes/{name}.md",md.encode("utf-8"))
+                md=_note_to_markdown(n.get("note_name",""),n.get("content",""),n.get("group_name",""))
+                grp=_safe_filename(n.get("group_name",""),fallback="") if _norm(n.get("group_name","")) else ""
+                folder=f"Notes/{grp}" if grp else "Notes"
+                z.writestr(f"{folder}/{name}.md",md.encode("utf-8"))
             if cmd_notes:
                 if progress:_set_prog(progress,int((len(notes)*100)/total),"Writing CommandsNotes ...")
                 z.writestr("CommandsNotes.md",_commands_notes_to_markdown(cmd_notes).encode("utf-8"))
@@ -867,6 +957,7 @@ class Note_LOYA_Database:
         note=self.read_note_by_name(note_name)
         if not note:raise RuntimeError("Note not found.")
         title=_norm(note.get("note_name","")) or "Untitled"
+        group=_norm(note.get("group_name",""))
         body=_html_to_markdown(note.get("content","") or "")
         body=body.strip()
         need_title=True
@@ -879,6 +970,9 @@ class Note_LOYA_Database:
         parts=[]
         if need_title:
             parts.append(f"# {title}")
+            parts.append("")
+        if group:
+            parts.append(f"Group: {group}")
             if body:parts.append("")
         if body:parts.append(body)
         with open(out_path,"w",encoding="utf-8") as f:f.write("\n".join(parts).rstrip()+"\n")
@@ -888,13 +982,14 @@ class Note_LOYA_Database:
         if not note:raise RuntimeError("Note not found.")
         title=_norm(note.get("note_name","")) or "Untitled"
         html=_replace_cmd_tables_with_c(note.get("content","") or "",title)
-        md=_note_to_markdown(title,html)
+        md=_note_to_markdown(title,html,note.get("group_name",""))
         with open(out_path,"w",encoding="utf-8") as f:f.write(md)
     def export_note_html(self,note_name,out_path):
         self.ensure()
         note=self.read_note_by_name(note_name)
         if not note:raise RuntimeError("Note not found.")
         title=_norm(note.get("note_name","")) or "Untitled"
+        group=_norm(note.get("group_name",""))
         body=_extract_html_body(note.get("content","") or "")
         doc=[
             "<!DOCTYPE html>",
@@ -905,6 +1000,7 @@ class Note_LOYA_Database:
             "</head>",
             "<body>",
             f"<h1>{_html_escape(title)}</h1>",
+            (f"<p><strong>Group:</strong> {_html_escape(group)}</p>" if group else ""),
             body,
             "</body>",
             "</html>",
@@ -969,13 +1065,15 @@ class Note_LOYA_Database:
             rows=_parse_commands_notes_markdown(body)
             return {"CommandsNotes":rows}
         if progress:_set_prog(progress,60,"Parsing Notes ...")
+        group_name,body=_extract_md_group(body)
         name=_norm(title)
         if not name:
             base=os.path.splitext(os.path.basename(path))[0]
             name=_safe_filename(base,fallback="Imported Note")
-        html_text=_markdown_to_html(_wrap_c_blocks(text))
-        cmd_blocks=_parse_cmd_blocks(text)
-        row={"note_name":name,"content":html_text}
+        note_md=("# "+name+"\n\n"+body) if body else ("# "+name)
+        html_text=_markdown_to_html(_wrap_c_blocks(note_md))
+        cmd_blocks=_parse_cmd_blocks(note_md)
+        row={"note_name":name,"group_name":group_name,"content":html_text}
         if cmd_blocks:row["cmd_blocks"]=cmd_blocks
         return {"Notes":[row]}
     def parse_incoming_csv_zip(self,path,progress=None):
@@ -1002,7 +1100,7 @@ class Note_LOYA_Database:
         t=table.lower()
         r={k:("" if v is None else v) for k,v in (row or {}).items()} if isinstance(row,dict) else {}
         if t=="notes":
-            out={"note_name":_norm(r.get("note_name",r.get("title",""))),"content":r.get("content","") or "", "created_at":_norm(r.get("created_at","")), "updated_at":_norm(r.get("updated_at",""))}
+            out={"note_name":_norm(r.get("note_name",r.get("title",""))),"group_name":_norm(r.get("group_name",r.get("group",""))),"content":r.get("content","") or "", "created_at":_norm(r.get("created_at","")), "updated_at":_norm(r.get("updated_at",""))}
             if isinstance(r.get("cmd_blocks"),list):out["cmd_blocks"]=r.get("cmd_blocks")
             return out
         if t=="commandsnotes":
@@ -1038,7 +1136,7 @@ class Note_LOYA_Database:
         def ins(t,r):
             tl=t.lower()
             if tl=="notes":
-                cur.execute("INSERT INTO Notes(note_name,content,created_at,updated_at) VALUES(?,?,?,?)",(_norm(r.get("note_name","")),r.get("content","") or "",r.get("created_at") or now,r.get("updated_at") or now))
+                cur.execute("INSERT INTO Notes(note_name,group_name,content,created_at,updated_at) VALUES(?,?,?,?,?)",(_norm(r.get("note_name","")),_norm(r.get("group_name","")),r.get("content","") or "",r.get("created_at") or now,r.get("updated_at") or now))
                 try:
                     nid=int(cur.lastrowid)
                     _sync_note_commands(cur,nid,_norm(r.get("note_name","")),r.get("content","") or "",now,r.get("cmd_blocks"))
@@ -1060,7 +1158,7 @@ class Note_LOYA_Database:
         def upd(t,old,r):
             tl=t.lower()
             if tl=="notes":
-                cur.execute("UPDATE Notes SET content=?,updated_at=? WHERE note_name=?",(r.get("content","") or "",now,_norm(old.get("note_name",""))))
+                cur.execute("UPDATE Notes SET group_name=?,content=?,updated_at=? WHERE note_name=?",(_norm(r.get("group_name","")),r.get("content","") or "",now,_norm(old.get("note_name",""))))
                 try:
                     cur.execute("SELECT id FROM Notes WHERE note_name=?",( _norm(old.get("note_name","")),))
                     row=cur.fetchone()
@@ -1293,57 +1391,9 @@ class Backup:
             except:bad+=1
         return ok,bad
     def create(self,progress=None):
-        os.makedirs(self.dir,exist_ok=True)
-        name=f"Backup_{_now()}.zip"
-        out=os.path.join(self.dir,name)
-        tmp=tempfile.mkdtemp(prefix="loya_backup_")
-        try:
-            if progress:_set_prog(progress,10,"Collecting files ...")
-            d=_data_dir()
-            with zipfile.ZipFile(out,"w",compression=zipfile.ZIP_DEFLATED) as z:
-                for root,dirs,files in os.walk(d):
-                    for fn in files:
-                        p=os.path.join(root,fn)
-                        rel=os.path.relpath(p,d).replace("\\","/")
-                        z.write(p,arcname=f"Data/{rel}")
-            if progress:_set_prog(progress,100,"Done.")
-        finally:
-            try:shutil.rmtree(tmp,ignore_errors=True)
-            except:pass
-        return out
+        return _update_backup.create_data_backup(progress=progress,prefix="Backup",out_dir=self.dir)
     def restore(self,zip_path,mode,progress=None):
-        if not zip_path or not os.path.isfile(zip_path):return False,"Backup not found"
-        if mode not in ("merge","replace"):return False,"Invalid mode"
-        tmp=tempfile.mkdtemp(prefix="loya_restore_")
-        try:
-            if progress:_set_prog(progress,10,"Extracting ...")
-            with zipfile.ZipFile(zip_path,"r") as z:z.extractall(tmp)
-            src=os.path.join(tmp,"Data")
-            dst=_data_dir()
-            if not os.path.isdir(src):return False,"Missing Data/ in backup"
-            if progress:_set_prog(progress,40,"Restoring Data/ ...")
-            if mode=="replace":
-                for root,dirs,files in os.walk(src):
-                    rel=os.path.relpath(root,src)
-                    td=os.path.join(dst,rel) if rel!="." else dst
-                    os.makedirs(td,exist_ok=True)
-                    for fn in files:shutil.copy2(os.path.join(root,fn),os.path.join(td,fn))
-            else:
-                for root,dirs,files in os.walk(src):
-                    rel=os.path.relpath(root,src)
-                    td=os.path.join(dst,rel) if rel!="." else dst
-                    os.makedirs(td,exist_ok=True)
-                    for fn in files:
-                        dp=os.path.join(td,fn)
-                        if os.path.exists(dp):continue
-                        shutil.copy2(os.path.join(root,fn),dp)
-            if progress:_set_prog(progress,100,"Done.")
-            return True,"Restore done. Restart app if needed."
-        except Exception as e:
-            return False,f"Restore failed: {e}"
-        finally:
-            try:shutil.rmtree(tmp,ignore_errors=True)
-            except:pass
+        return _update_backup.restore_data_backup(zip_path,mode=mode,progress=progress)
     def delete(self,paths):
         ok=0;bad=0
         for p in (paths or []):
@@ -1471,6 +1521,28 @@ def security_encrypt_on_exit():
         _log("[+]",f"DB encrypted on exit")
     else:
         _log("[!]",f"DB encrypt on exit failed: {msg}")
+def _plan_preview_counts(plan,decisions=None):
+    dups=plan.get("dups") or []
+    added=len(plan.get("new") or [])
+    merged=int(plan.get("merged") or 0)
+    replaced=0;overwritten=0;skipped=len(plan.get("skip") or [])
+    if decisions is None:skipped+=len(dups)
+    else:
+        for idx,_ in enumerate(dups):
+            act=decisions.get(idx,"Skip")
+            if act=="Replace":replaced+=1
+            elif act=="Overwrite":overwritten+=1
+            else:skipped+=1
+    return {"added":added,"merged":merged,"replaced":replaced,"overwritten":overwritten,"skipped":skipped,"dups":len(dups)}
+def _skip_preview_lines(plan,limit=8):
+    out=[]
+    for it in (plan.get("skip") or [])[:max(0,int(limit))]:
+        table=_norm(it.get("table","")) or "Unknown"
+        row=it.get("incoming") or {}
+        label=_norm((row.get("note_name","") if isinstance(row,dict) else "")) or _norm((row.get("key","") if isinstance(row,dict) else "")) or _norm((row.get("name","") if isinstance(row,dict) else "")) or _norm((row.get("command","") if isinstance(row,dict) else ""))
+        if not label:label=_norm(json.dumps(row,ensure_ascii=False))[:120]
+        out.append(f"{table}: {label or 'Unsupported row'}")
+    return out
 class _DupDialog(QDialog):
     def __init__(self,owner,title,rows):
         super().__init__(owner)
@@ -1538,6 +1610,108 @@ class _DupDialog(QDialog):
             w=self.table.cellWidget(r,0)
             out[r]=w.currentText() if isinstance(w,QComboBox) else "Skip"
         return out
+class _ImportPreviewDialog(QDialog):
+    def __init__(self,owner,title,plan,rows,source_label=""):
+        super().__init__(owner)
+        self.setObjectName("ImportDupDialog")
+        self.setWindowTitle(title)
+        self.resize(1080,720)
+        self._plan=plan if isinstance(plan,dict) else {"new":[],"dups":[],"skip":[]}
+        self._rows=list(rows or [])
+        lay=QVBoxLayout(self);lay.setContentsMargins(14,14,14,14);lay.setSpacing(10)
+        head=QHBoxLayout();head.setSpacing(10)
+        t=QLabel("Import Preview",self);t.setObjectName("PageTitle");head.addWidget(t,1)
+        self.apply_all=QComboBox(self);self.apply_all.setObjectName("HomePerPage");self.apply_all.addItems(["Per Item","Skip All","Replace All","Overwrite All"]);self.apply_all.currentTextChanged.connect(self._apply_all);head.addWidget(QLabel("Duplicates",self),0);head.addWidget(self.apply_all,0)
+        lay.addLayout(head)
+        sub=QLabel(("Dry-run preview only. No data is written until you click Apply."+(f"\nSource: {source_label}" if _norm(source_label) else "")),self);sub.setObjectName("PageSubTitle");sub.setWordWrap(True);lay.addWidget(sub,0)
+        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(14);grid.setVerticalSpacing(6)
+        self.lbl_added=QLabel("0",self);self.lbl_added.setObjectName("PageSubTitle")
+        self.lbl_merged=QLabel("0",self);self.lbl_merged.setObjectName("PageSubTitle")
+        self.lbl_replaced=QLabel("0",self);self.lbl_replaced.setObjectName("PageSubTitle")
+        self.lbl_overwritten=QLabel("0",self);self.lbl_overwritten.setObjectName("PageSubTitle")
+        self.lbl_skipped=QLabel("0",self);self.lbl_skipped.setObjectName("PageSubTitle")
+        self.lbl_dups=QLabel("0",self);self.lbl_dups.setObjectName("PageSubTitle")
+        grid.addWidget(QLabel("Added",self),0,0);grid.addWidget(self.lbl_added,0,1)
+        grid.addWidget(QLabel("Merged",self),0,2);grid.addWidget(self.lbl_merged,0,3)
+        grid.addWidget(QLabel("Replaced",self),1,0);grid.addWidget(self.lbl_replaced,1,1)
+        grid.addWidget(QLabel("Overwritten",self),1,2);grid.addWidget(self.lbl_overwritten,1,3)
+        grid.addWidget(QLabel("Skipped",self),2,0);grid.addWidget(self.lbl_skipped,2,1)
+        grid.addWidget(QLabel("Duplicates",self),2,2);grid.addWidget(self.lbl_dups,2,3)
+        lay.addLayout(grid)
+        skip_lines=_skip_preview_lines(self._plan)
+        skip_total=len(self._plan.get("skip") or [])
+        skip_msg=""
+        if skip_total:
+            skip_msg=f"Rows that cannot be imported safely will be skipped: {skip_total}."
+            if skip_lines:skip_msg+="\n"+("\n".join(skip_lines))
+            if skip_total>len(skip_lines):skip_msg+=f"\n... and {skip_total-len(skip_lines)} more."
+        else:
+            skip_msg="No invalid rows were detected in the dry-run."
+        self.skip_info=QLabel(skip_msg,self);self.skip_info.setObjectName("PageSubTitle");self.skip_info.setWordWrap(True);lay.addWidget(self.skip_info,0)
+        self.table=QTableWidget(self);self.table.setObjectName("HomeTable");self.table.setColumnCount(6);self.table.setHorizontalHeaderLabels(["Action","Table","Key","Existing","Incoming","Incoming Command"]);self.table.verticalHeader().setVisible(False);self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers);self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows);self.table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection);self.table.setAlternatingRowColors(False);self.table.setShowGrid(True)
+        h=self.table.horizontalHeader();h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter);h.setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents);h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents);h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents);h.setSectionResizeMode(3,QHeaderView.ResizeMode.Stretch);h.setSectionResizeMode(4,QHeaderView.ResizeMode.Stretch);h.setSectionResizeMode(5,QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self.table,1)
+        fb=QHBoxLayout();fb.setSpacing(10)
+        self.btn_ok=QToolButton(self);self.btn_ok.setObjectName("TargetSaveBtn");self.btn_ok.setText("Apply")
+        self.btn_cancel=QToolButton(self);self.btn_cancel.setObjectName("TargetCancelBtn");self.btn_cancel.setText("Cancel")
+        self.btn_ok.clicked.connect(self.accept);self.btn_cancel.clicked.connect(self.reject)
+        fb.addStretch(1);fb.addWidget(self.btn_ok,0);fb.addWidget(self.btn_cancel,0)
+        lay.addLayout(fb)
+        self._render();self._refresh_summary()
+    def _make_combo(self):
+        cb=QComboBox(self.table);cb.addItems(["Skip","Replace","Overwrite"]);cb.setCurrentText("Skip");cb.currentTextChanged.connect(lambda *_:self._refresh_summary());return cb
+    def _apply_all(self,t):
+        if t=="Per Item":return
+        want="Skip" if t=="Skip All" else ("Replace" if t=="Replace All" else "Overwrite")
+        for r in range(self.table.rowCount()):
+            w=self.table.cellWidget(r,0)
+            if isinstance(w,QComboBox):w.setCurrentText(want)
+        self._refresh_summary()
+    def _render(self):
+        self.table.setRowCount(len(self._rows))
+        for r,it in enumerate(self._rows):
+            self.table.setCellWidget(r,0,self._make_combo())
+            t=QTableWidgetItem(_norm(it.get("table","")));t.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            k=QTableWidgetItem(_norm(it.get("key",""))[:180]);k.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            ex=QTableWidgetItem(_norm(it.get("existing",""))[:260]);ex.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            inc=QTableWidgetItem(_norm(it.get("incoming",""))[:260]);inc.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            cmd=QTableWidgetItem(_norm(it.get("in_cmd",""))[:260]);cmd.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+            self.table.setItem(r,1,t);self.table.setItem(r,2,k);self.table.setItem(r,3,ex);self.table.setItem(r,4,inc);self.table.setItem(r,5,cmd);self.table.setRowHeight(r,44)
+        self.table.clearSelection()
+    def decisions(self):
+        out={}
+        for r in range(self.table.rowCount()):
+            w=self.table.cellWidget(r,0)
+            out[r]=w.currentText() if isinstance(w,QComboBox) else "Skip"
+        return out
+    def _refresh_summary(self):
+        counts=_plan_preview_counts(self._plan,self.decisions())
+        self.lbl_added.setText(str(int(counts.get("added",0))))
+        self.lbl_merged.setText(str(int(counts.get("merged",0))))
+        self.lbl_replaced.setText(str(int(counts.get("replaced",0))))
+        self.lbl_overwritten.setText(str(int(counts.get("overwritten",0))))
+        self.lbl_skipped.setText(str(int(counts.get("skipped",0))))
+        self.lbl_dups.setText(str(int(counts.get("dups",0))))
+class _CurrentPageStack(QStackedWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(lambda *_:self.updateGeometry())
+    def sizeHint(self):
+        cur=self.currentWidget()
+        if cur is not None:
+            try:
+                sz=cur.sizeHint()
+                if sz.isValid():return sz
+            except Exception:pass
+        return super().sizeHint()
+    def minimumSizeHint(self):
+        cur=self.currentWidget()
+        if cur is not None:
+            try:
+                sz=cur.minimumSizeHint()
+                if sz.isValid():return sz
+            except Exception:pass
+        return super().minimumSizeHint()
 class NCN_Import:
     def __init__(self,db):self.db=db
     def _md_name(self,path):
@@ -1552,27 +1726,14 @@ class NCN_Import:
             for r in rows:
                 if isinstance(r,dict):r["note_name"]=name
         return incoming
-    def run(self,owner,kind,path):
-        if not path:return None
-        prog=_progress(owner,"Import","Preparing import ...");prog.show()
-        try:
-            if not self.db.exists():self.db.ensure()
-            existing=self.db.load_existing_maps()
-            if kind=="db":incoming=self.db.parse_incoming_db(path,progress=prog)
-            elif kind=="json":incoming=self.db.parse_incoming_json(path,progress=prog)
-            elif kind=="md":incoming=self._apply_md_name(self.db.parse_incoming_markdown(path,progress=prog),path)
-            else:incoming=self.db.parse_incoming_csv_zip(path,progress=prog)
-            _set_prog(prog,55,"Scanning duplicates ...")
-            plan=self.db.build_import_plan(incoming,existing,progress=prog)
-            dups=[self.db.summarize_dup(x) for x in (plan.get("dups") or [])]
-            _set_prog(prog,80,"Ready.")
-        finally:
-            prog.close()
-        decisions={}
-        if dups:
-            dlg=_DupDialog(owner,"Import Duplicates",dups)
-            if dlg.exec()!=QDialog.DialogCode.Accepted:return None
-            decisions=dlg.decisions()
+    def _preview(self,owner,plan,path_label=""):
+        dups=[self.db.summarize_dup(x) for x in (plan.get("dups") or [])]
+        dlg=_ImportPreviewDialog(owner,"Import Preview",plan,dups,source_label=path_label)
+        if dlg.exec()!=QDialog.DialogCode.Accepted:return None
+        return dlg.decisions()
+    def _apply_import(self,owner,plan,incoming,kind,path_label=""):
+        decisions=self._preview(owner,plan,path_label)
+        if decisions is None:return None
         prog=_progress(owner,"Import","Applying import ...");prog.show()
         try:
             res=self.db.apply_plan(plan,decisions,progress=prog)
@@ -1587,41 +1748,43 @@ class NCN_Import:
         finally:
             prog.close()
         return res
-    def run_multi_markdown(self,owner,paths):
-        if not paths:return None
-        prog=_progress(owner,"Import","Loading markdown files ...");prog.show()
+    def run(self,owner,kind,path):
+        if not path:return None
+        prog=_progress(owner,"Import","Preparing import ...");prog.show()
         try:
             if not self.db.exists():self.db.ensure()
-            total=max(1,len(paths))
-            totals={"added":0,"replaced":0,"overwritten":0,"skipped":0,"bad":0}
-            for i,p in enumerate(paths):
-                _set_prog(prog,int((i*100)/total),f"Importing {i+1}/{total}: {os.path.basename(p)}")
+            existing=self.db.load_existing_maps()
+            if kind=="db":incoming=self.db.parse_incoming_db(path,progress=prog)
+            elif kind=="json":incoming=self.db.parse_incoming_json(path,progress=prog)
+            elif kind=="md":incoming=self._apply_md_name(self.db.parse_incoming_markdown(path,progress=prog),path)
+            else:incoming=self.db.parse_incoming_csv_zip(path,progress=prog)
+            _set_prog(prog,55,"Scanning duplicates ...")
+            plan=self.db.build_import_plan(incoming,existing,progress=prog)
+            _set_prog(prog,80,"Ready.")
+        finally:
+            prog.close()
+        return self._apply_import(owner,plan,incoming,kind,os.path.basename(path))
+    def run_multi_markdown(self,owner,paths):
+        if not paths:return None
+        if not self.db.exists():self.db.ensure()
+        totals={"added":0,"replaced":0,"overwritten":0,"skipped":0,"bad":0}
+        total=max(1,len(paths))
+        for i,p in enumerate(paths):
+            prog=_progress(owner,"Import",f"Preparing {i+1}/{total}: {os.path.basename(p)}");prog.show()
+            try:
                 incoming=self._apply_md_name(self.db.parse_incoming_markdown(p,progress=prog),p)
                 existing=self.db.load_existing_maps()
                 _set_prog(prog,55,"Scanning duplicates ...")
                 plan=self.db.build_import_plan(incoming,existing,progress=prog)
-                dups=[self.db.summarize_dup(x) for x in (plan.get("dups") or [])]
-                decisions={}
-                if dups:
-                    dlg=_DupDialog(owner,"Import Duplicates",dups)
-                    if dlg.exec()!=QDialog.DialogCode.Accepted:return None
-                    decisions=dlg.decisions()
-                _set_prog(prog,70,"Applying import ...")
-                res=self.db.apply_plan(plan,decisions,progress=prog) or {}
-                names=[]
-                rows=incoming.get("Notes") if isinstance(incoming.get("Notes"),list) else []
-                for r in rows:
-                    if isinstance(r,dict):
-                        nm=_norm(r.get("note_name",""))
-                        if nm:names.append(nm)
-                if names:self.db.sync_commands_from_notes(names,progress=prog)
-                for k in totals.keys():
-                    try:totals[k]+=int(res.get(k,0))
-                    except Exception:pass
-            _set_prog(prog,100,"Done.")
-            return totals
-        finally:
-            prog.close()
+                _set_prog(prog,80,"Ready.")
+            finally:
+                prog.close()
+            res=self._apply_import(owner,plan,incoming,"md",os.path.basename(p)) or {}
+            if not res:return None
+            for k in totals.keys():
+                try:totals[k]+=int(res.get(k,0))
+                except Exception:pass
+        return totals
 class NCN_Export:
     def __init__(self,db):self.db=db
     def run(self,owner,kind,out_path):
@@ -1776,10 +1939,10 @@ class _BackupPage(QWidget):
         h=self.table.horizontalHeader()
         h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(0,QHeaderView.ResizeMode.Interactive)
         h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
         h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(3,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
         v.addWidget(self.table,1)
         self.status=QLabel("",box);self.status.setObjectName("PageSubTitle")
         v.addWidget(self.status,0)
@@ -1792,6 +1955,37 @@ class _BackupPage(QWidget):
         self.cmb_freq.currentIndexChanged.connect(self._save_auto_settings)
         self.cmb_keep.currentIndexChanged.connect(self._save_auto_settings)
         QTimer.singleShot(0,self._render)
+    def _schedule_table_refresh(self):QTimer.singleShot(0,self._refresh_table_layout)
+    def showEvent(self,e):
+        try:super().showEvent(e)
+        except Exception:pass
+        self._schedule_table_refresh()
+    def resizeEvent(self,e):
+        try:super().resizeEvent(e)
+        except Exception:pass
+        self._schedule_table_refresh()
+    def _refresh_table_layout(self):
+        try:self.table.doItemsLayout()
+        except Exception:pass
+        try:self.table.updateGeometry()
+        except Exception:pass
+        try:self.table.viewport().update()
+        except Exception:pass
+        try:
+            h=self.table.horizontalHeader()
+            h.setStretchLastSection(False)
+            h.setSectionResizeMode(0,QHeaderView.ResizeMode.Interactive)
+            h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
+            h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
+            h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
+            self.table.resizeColumnToContents(1)
+            self.table.resizeColumnToContents(2)
+            self.table.setColumnWidth(3,56)
+            view_w=max(0,int(self.table.viewport().width()))
+            other=self.table.columnWidth(1)+self.table.columnWidth(2)+self.table.columnWidth(3)+12
+            name_w=max(160,min(360,max(160,view_w-other)))
+            self.table.setColumnWidth(0,name_w)
+        except Exception:pass
     def _set_status(self,s):self.status.setText(_norm(s))
     def _load_auto_settings(self):
         cfg=_get_backup_settings()
@@ -1825,7 +2019,7 @@ class _BackupPage(QWidget):
         rows=self.back.list()
         self.table.setRowCount(len(rows))
         for r,(p,mt,sz) in enumerate(rows):
-            name=QTableWidgetItem(os.path.basename(p));name.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft);name.setData(Qt.ItemDataRole.UserRole,p)
+            name=QTableWidgetItem(os.path.basename(p));name.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft);name.setData(Qt.ItemDataRole.UserRole,p);name.setToolTip(p)
             mod=QTableWidgetItem(datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S"));mod.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             size=QTableWidgetItem(_fmt_size(sz));size.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             x=QToolButton(self.table);x.setText("X");x.setCursor(Qt.CursorShape.PointingHandCursor);x.setFixedSize(34,30)
@@ -1835,6 +2029,7 @@ class _BackupPage(QWidget):
             self.table.setRowHeight(r,44)
         self.table.clearSelection()
         self._on_sel()
+        self._schedule_table_refresh()
     def _selected_paths(self):
         out=[]
         sm=self.table.selectionModel()
@@ -1910,6 +2105,578 @@ class _BackupPage(QWidget):
         self._set_status(f"Deleted: {ok} | Failed: {bad}")
         _log("[+]",f"Backups deleted ok={ok} bad={bad}")
         self._render()
+class _UpdatePage(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(2)
+        top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
+        t=QLabel("Update",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
+        box=QFrame(self);box.setObjectName("ContentFrame")
+        v=QVBoxLayout(box);v.setContentsMargins(8,6,8,8);v.setSpacing(6)
+        self.info=QLabel("Check the official LOYA repository, download authenticated releases, and apply updates safely without touching Data/.",box);self.info.setObjectName("PageSubTitle");self.info.setWordWrap(True)
+        v.addWidget(self.info,0)
+        row=QHBoxLayout();row.setSpacing(6)
+        self.chk_auto=QCheckBox("Enable update checks",box)
+        self.cmb_freq=QComboBox(box);self.cmb_freq.setObjectName("HomePerPage")
+        self.cmb_channel=QComboBox(box);self.cmb_channel.setObjectName("HomePerPage")
+        self._freq_items=[("Every 6 hours",6),("Every 12 hours",12),("Daily",24),("Every 3 days",72),("Weekly",168)]
+        self.cmb_freq.addItems([x[0] for x in self._freq_items])
+        self.cmb_channel.addItems(["stable"])
+        row.addWidget(self.chk_auto,0);row.addWidget(QLabel("Frequency",box),0);row.addWidget(self.cmb_freq,0);row.addWidget(QLabel("Channel",box),0);row.addWidget(self.cmb_channel,0);row.addStretch(1)
+        v.addLayout(row)
+        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(8);grid.setVerticalSpacing(4);grid.setColumnStretch(1,1)
+        self.cur_ver=QLabel("-",box);self.cur_ver.setObjectName("PageSubTitle")
+        self.latest_ver=QLabel("-",box);self.latest_ver.setObjectName("PageSubTitle")
+        self.last_checked=QLabel("-",box);self.last_checked.setObjectName("PageSubTitle")
+        self.last_good=QLabel("-",box);self.last_good.setObjectName("PageSubTitle")
+        self.source_repo=QLineEdit(box);self.source_repo.setObjectName("TargetInput");self.source_repo.setReadOnly(True)
+        self.manifest_url=QLineEdit(box);self.manifest_url.setObjectName("TargetInput");self.manifest_url.setReadOnly(True)
+        self.status=QLabel("-",box);self.status.setObjectName("PageSubTitle");self.status.setWordWrap(True)
+        self.snapshots=QLabel("-",box);self.snapshots.setObjectName("PageSubTitle");self.snapshots.setWordWrap(True)
+        grid.addWidget(QLabel("Current Version",box),0,0);grid.addWidget(self.cur_ver,0,1)
+        grid.addWidget(QLabel("Latest Available",box),1,0);grid.addWidget(self.latest_ver,1,1)
+        grid.addWidget(QLabel("Last Checked",box),2,0);grid.addWidget(self.last_checked,2,1)
+        grid.addWidget(QLabel("Last Good Version",box),3,0);grid.addWidget(self.last_good,3,1)
+        grid.addWidget(QLabel("Authenticated Repo",box),4,0);grid.addWidget(self.source_repo,4,1)
+        grid.addWidget(QLabel("Manifest URL",box),5,0);grid.addWidget(self.manifest_url,5,1)
+        grid.addWidget(QLabel("Update Status",box),6,0);grid.addWidget(self.status,6,1)
+        grid.addWidget(QLabel("Code Snapshots",box),7,0);grid.addWidget(self.snapshots,7,1)
+        v.addLayout(grid)
+        acts=QHBoxLayout();acts.setSpacing(6)
+        self.btn_check=QToolButton(box);self.btn_check.setObjectName("TargetAddBtn");self.btn_check.setText("Check Now");self.btn_check.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_update=QToolButton(box);self.btn_update.setObjectName("TargetMiniBtn");self.btn_update.setText("Update Now");self.btn_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_logs=QToolButton(box);self.btn_logs.setObjectName("TargetMiniBtn");self.btn_logs.setText("Open Logs");self.btn_logs.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_snaps=QToolButton(box);self.btn_snaps.setObjectName("TargetMiniBtn");self.btn_snaps.setText("Open Snapshots");self.btn_snaps.setCursor(Qt.CursorShape.PointingHandCursor)
+        acts.addWidget(self.btn_check,0);acts.addWidget(self.btn_update,0);acts.addWidget(self.btn_logs,0);acts.addWidget(self.btn_snaps,0);acts.addStretch(1)
+        v.addLayout(acts)
+        self.footer=QLabel("",box);self.footer.setObjectName("PageSubTitle");self.footer.setWordWrap(True)
+        v.addWidget(self.footer,0)
+        self.footer.hide()
+        root.addWidget(box,0)
+        root.addStretch(1)
+        self.chk_auto.stateChanged.connect(self._save_update_settings)
+        self.cmb_freq.currentIndexChanged.connect(self._save_update_settings)
+        self.cmb_channel.currentIndexChanged.connect(self._save_update_settings)
+        self.btn_check.clicked.connect(self._do_check)
+        self.btn_update.clicked.connect(self._do_update_now)
+        self.btn_logs.clicked.connect(self._open_logs)
+        self.btn_snaps.clicked.connect(self._open_snapshots)
+        QTimer.singleShot(0,self._load_all)
+    def _set_footer(self,msg):
+        text=_norm(msg)
+        self.footer.setText(text)
+        self.footer.setVisible(bool(text))
+    def _fmt_when(self,text):
+        s=_norm(text)
+        if not s:return "-"
+        try:
+            d=datetime.fromisoformat(s.replace("Z","+00:00"))
+            return d.strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return s
+    def _update_status_text(self,state):
+        st=state if isinstance(state,dict) else {}
+        cur=_norm(st.get("current_version",""))
+        latest=_norm(st.get("last_available_version",""))
+        pending=_norm(st.get("pending_version",""))
+        err=_norm(st.get("last_error",""))
+        if err:return "Error: "+err
+        if st.get("update_in_progress"):
+            if pending and cur and pending==cur:
+                return f"Installed update {pending}. Waiting for first successful launch confirmation."
+            return f"Update in progress to {pending or latest or '?'}."
+        if pending:
+            return f"Pending update detected for {pending}."
+        if cur and latest:
+            try:
+                cmpv=_compare_update_versions(latest,cur)
+                if cmpv>0:return f"New version available: {latest}."
+                if cmpv==0:return "You are on the latest version."
+            except Exception:
+                pass
+        if latest:return f"Latest authenticated release: {latest}."
+        return "Not checked yet."
+    def _load_update_settings(self):
+        cfg=_get_update_settings()
+        for w in (self.chk_auto,self.cmb_freq,self.cmb_channel):
+            try:w.blockSignals(True)
+            except:pass
+        self.chk_auto.setChecked(bool(cfg.get("auto_enabled",False)))
+        idx=0
+        for i,(_,hrs) in enumerate(self._freq_items):
+            if int(hrs)==int(cfg.get("check_interval_hours",24)):idx=i;break
+        self.cmb_freq.setCurrentIndex(idx)
+        self.cmb_channel.setCurrentIndex(0)
+        for w in (self.chk_auto,self.cmb_freq,self.cmb_channel):
+            try:w.blockSignals(False)
+            except:pass
+        return cfg
+    def _save_update_settings(self,*_):
+        hrs=self._freq_items[self.cmb_freq.currentIndex()][1] if self._freq_items else 24
+        cfg={"auto_enabled":self.chk_auto.isChecked(),"check_interval_hours":hrs,"repo_url":_UP_REPO_URL,"manifest_url":_UP_MANIFEST_URL,"last_checked":_get_update_settings().get("last_checked",""),"last_channel":"stable"}
+        _save_update_settings(cfg)
+        self._set_footer("Update settings saved.")
+    def _refresh_view(self,state=None):
+        st=state if isinstance(state,dict) else _get_update_state()
+        ident=_get_app_identity()
+        cfg=_sync_update_settings_from_state(st)
+        snaps=_list_code_snapshots()
+        self.cur_ver.setText(_norm(ident.get("version","")) or "-")
+        self.latest_ver.setText(_norm(st.get("last_available_version","")) or "-")
+        self.last_checked.setText(self._fmt_when(cfg.get("last_checked","") or st.get("last_checked","")))
+        self.last_good.setText(_norm(st.get("last_good_version","")) or "-")
+        self.source_repo.setText(_norm(st.get("source_repo","")) or _UP_REPO_URL)
+        self.manifest_url.setText(_UP_MANIFEST_URL)
+        self.status.setText(self._update_status_text(st))
+        snap_dir=_old_versions_dir()
+        self.snapshots.setText(f"{len(snaps)} snapshot(s) in {snap_dir}")
+        cur=_norm(st.get("current_version",""));latest=_norm(st.get("last_available_version",""));can_update=False
+        if cur and latest:
+            try:can_update=_compare_update_versions(latest,cur)>0
+            except Exception:can_update=False
+        self.btn_update.setEnabled(can_update and not bool(st.get("update_in_progress")))
+    def _load_all(self):
+        self._load_update_settings()
+        self._refresh_view()
+    def _do_check(self):
+        prog=_progress(self,"Update Check","Checking official release ...");prog.show()
+        try:
+            out=_check_for_updates(timeout=10)
+        finally:
+            try:prog.close()
+            except:pass
+        state=out.get("state",{}) if isinstance(out,dict) else {}
+        self._refresh_view(state)
+        if out.get("ok"):
+            if out.get("update_available"):
+                msg=f"New authenticated version available: {state.get('last_available_version','')}."
+            else:
+                msg="You are already on the latest authenticated version."
+            self._set_footer(msg);_log("[+]",f"Update check ok latest={state.get('last_available_version','')}")
+        else:
+            msg="Update check failed: "+_norm(out.get("error","Unknown error"))
+            self._set_footer(msg);_log("[!]",msg)
+    def _do_update_now(self):
+        check=self._check_state_ready()
+        if not check:return
+        cur=_norm(check.get("current_version",""));latest=_norm(check.get("last_available_version",""))
+        mb=QMessageBox(self);mb.setWindowTitle("Apply Update");mb.setText(f"Apply authenticated update from {cur or '?'} to {latest or '?'}?\n\nLOYA will create data and code backups, close the main window, apply the package from the official repository, and relaunch through RunNote.py.")
+        bok=mb.addButton("Apply Update",QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton()!=bok:return
+        prog=_progress(self,"Update","Checking authenticated release ...");prog.show()
+        try:
+            out=_start_update_install(timeout=60,parent_pid=os.getpid(),launcher_python=sys.executable,launcher_script=os.path.join(_project_root(),"RunNote.py"),progress=prog)
+        except Exception as e:
+            out={"ok":False,"error":str(e),"state":_get_update_state()}
+        finally:
+            try:prog.close()
+            except:pass
+        state=out.get("state",{}) if isinstance(out,dict) else {}
+        self._refresh_view(state)
+        if not out.get("ok"):
+            msg="Update start failed: "+_norm(out.get("error","Unknown error"))
+            self._set_footer(msg);_log("[!]",msg)
+            try:QMessageBox.warning(self,"Update Failed",msg)
+            except Exception:pass
+            return
+        backups=out.get("backups",{}) if isinstance(out.get("backups",{}),dict) else {}
+        msg="The authenticated package is ready. LOYA will close now, apply the update out of process, and relaunch through RunNote.py."
+        self._set_footer(msg)
+        _log("[+]",f"Update handoff ready target={out.get('manifest',{}).get('version','')} helper_pid={out.get('helper_pid',0)} data={backups.get('data_backup','')} code={backups.get('code_snapshot','')}")
+        try:QMessageBox.information(self,"Applying Update",msg+f"\n\nData backup:\n{backups.get('data_backup','')}\n\nCode snapshot:\n{backups.get('code_snapshot','')}")
+        except Exception:pass
+        app=QApplication.instance()
+        if app is not None:QTimer.singleShot(150,app.quit)
+    def _check_state_ready(self):
+        state=_get_update_state()
+        cur=_norm(state.get("current_version",""));latest=_norm(state.get("last_available_version",""))
+        if state.get("update_in_progress"):
+            self._set_footer("An update is already in progress. Let it relaunch or recover first.")
+            return None
+        if not latest:
+            self._do_check()
+            state=_get_update_state();cur=_norm(state.get("current_version",""));latest=_norm(state.get("last_available_version",""))
+        if not latest:
+            self._set_footer("No authenticated release information is available yet.")
+            return None
+        try:
+            if _compare_update_versions(latest,cur)<=0:
+                self._set_footer("You are already on the latest authenticated version.")
+                return None
+        except Exception:
+            self._set_footer("Version comparison failed. Check again first.")
+            return None
+        return state
+    def _open_path(self,path):
+        p=_norm(path)
+        if not p:return False
+        try:
+            if os.name=="nt":os.startfile(p);return True
+            if sys.platform=="darwin":subprocess.Popen(["open",p]);return True
+            subprocess.Popen(["xdg-open",p]);return True
+        except Exception as e:
+            self._set_footer(f"Open failed: {e}")
+            return False
+    def _open_logs(self):
+        p=os.path.join(_health_check.logs_dir(),"Update_log.log")
+        try:
+            os.makedirs(os.path.dirname(p),exist_ok=True)
+            if not os.path.isfile(p):
+                with open(p,"a",encoding="utf-8"):pass
+        except Exception:
+            pass
+        if self._open_path(p):self._set_footer("Opened update log.")
+    def _open_snapshots(self):
+        p=_old_versions_dir()
+        os.makedirs(p,exist_ok=True)
+        if self._open_path(p):self._set_footer("Opened code snapshots folder.")
+class _RecycleBinPage(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self._rows=[]
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
+        t=QLabel("Recycle Bin",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
+        box=QFrame(self);box.setObjectName("ContentFrame")
+        v=QVBoxLayout(box);v.setContentsMargins(8,6,8,8);v.setSpacing(4)
+        self.info=QLabel("Deleted notes, commands, and targets stay here for 30 days before they are purged automatically.",box);self.info.setObjectName("PageSubTitle");self.info.setWordWrap(True)
+        v.addWidget(self.info,0)
+        row1=QHBoxLayout();row1.setSpacing(4)
+        self.search=QLineEdit(box);self.search.setObjectName("TargetSearch");self.search.setPlaceholderText("Search recycle bin...")
+        self.cmb_type=QComboBox(box);self.cmb_type.setObjectName("HomePerPage")
+        self.cmb_type.addItem("All","")
+        self.cmb_type.addItem("Notes",_recycle_bin.TYPE_NOTE)
+        self.cmb_type.addItem("Commands",_recycle_bin.TYPE_COMMAND)
+        self.cmb_type.addItem("Targets",_recycle_bin.TYPE_TARGET)
+        self.btn_refresh=QToolButton(box);self.btn_refresh.setObjectName("TargetAddBtn");self.btn_refresh.setText("Refresh")
+        self.btn_restore=QToolButton(box);self.btn_restore.setObjectName("TargetMiniBtn");self.btn_restore.setText("Restore")
+        self.btn_delete=QToolButton(box);self.btn_delete.setObjectName("TargetMiniBtn");self.btn_delete.setText("Delete Permanently")
+        row1.addWidget(self.search,1);row1.addWidget(self.cmb_type,0);row1.addWidget(self.btn_refresh,0);row1.addWidget(self.btn_restore,0);row1.addWidget(self.btn_delete,0)
+        v.addLayout(row1)
+        self.table=QTableWidget(box);self.table.setObjectName("HomeTable")
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(["Type","Label","Source","Deleted","Expires"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setAlternatingRowColors(False)
+        self.table.setShowGrid(True)
+        h=self.table.horizontalHeader()
+        h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
+        h.setStretchLastSection(False)
+        h.setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(3,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(4,QHeaderView.ResizeMode.ResizeToContents)
+        v.addWidget(self.table,1)
+        self.status=QLabel("",box);self.status.setObjectName("PageSubTitle");self.status.setWordWrap(True)
+        v.addWidget(self.status,0)
+        root.addWidget(box,1)
+        self.search.textChanged.connect(self._render)
+        self.cmb_type.currentIndexChanged.connect(self._load)
+        self.btn_refresh.clicked.connect(self._load)
+        self.btn_restore.clicked.connect(self._restore_selected)
+        self.btn_delete.clicked.connect(self._delete_selected)
+        self.table.itemSelectionChanged.connect(self._sync_actions)
+        self.table.cellDoubleClicked.connect(lambda r,c:self._restore_selected())
+        QTimer.singleShot(0,self._load)
+    def _fmt_when(self,text):
+        s=_norm(text)
+        if not s:return "-"
+        try:return datetime.fromisoformat(s.replace("Z","+00:00")).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:return s
+    def _set_status(self,msg):self.status.setText(_norm(msg))
+    def _selected_ids(self):
+        out=[]
+        sm=self.table.selectionModel()
+        if not sm:return out
+        for ix in sm.selectedRows(0):
+            it=self.table.item(ix.row(),0)
+            if not it:continue
+            rid=it.data(Qt.ItemDataRole.UserRole)
+            if str(rid).isdigit() and int(rid) not in out:out.append(int(rid))
+        return out
+    def _sync_actions(self):
+        n=len(self._selected_ids())
+        self.btn_restore.setEnabled(n>0)
+        self.btn_delete.setEnabled(n>0)
+    def _set_item(self,row,col,text,data=None,align=None,bold=False):
+        it=QTableWidgetItem(text)
+        it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
+        if align is not None:it.setTextAlignment(align)
+        if bold:
+            f=it.font();f.setBold(True);f.setWeight(800);it.setFont(f)
+        if data is not None:it.setData(Qt.ItemDataRole.UserRole,data)
+        self.table.setItem(row,col,it)
+    def _load(self,*_):
+        purged=_recycle_bin.purge_expired()
+        et=self.cmb_type.currentData()
+        self._rows=_recycle_bin.list_entries(entity_type=et or "")
+        self._render()
+        msg=f"{len(self._rows)} item(s) in Recycle Bin."
+        if purged:msg+=f" Purged expired: {purged}."
+        self._set_status(msg)
+    def _render(self,*_):
+        q=_norm(self.search.text()).lower()
+        rows=[]
+        for it in self._rows:
+            if q and q not in _norm(it.get("label","")).lower() and q not in _norm(it.get("source","")).lower() and q not in _norm(_recycle_bin.TYPE_LABELS.get(it.get("entity_type",""),it.get("entity_type",""))).lower():continue
+            rows.append(it)
+        self.table.setRowCount(len(rows))
+        for r,it in enumerate(rows):
+            typ=_recycle_bin.TYPE_LABELS.get(it.get("entity_type",""),_norm(it.get("entity_type","")).title())
+            self._set_item(r,0,typ,it.get("id"),Qt.AlignmentFlag.AlignCenter,True)
+            self._set_item(r,1,_norm(it.get("label","")) or "-",None,Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft,True)
+            self._set_item(r,2,_norm(it.get("source","")) or "-",None,Qt.AlignmentFlag.AlignCenter,False)
+            self._set_item(r,3,self._fmt_when(it.get("deleted_at","")),None,Qt.AlignmentFlag.AlignCenter,False)
+            self._set_item(r,4,self._fmt_when(it.get("expires_at","")),None,Qt.AlignmentFlag.AlignCenter,False)
+            self.table.setRowHeight(r,40)
+        self.table.clearSelection()
+        self._sync_actions()
+    def _restore_selected(self):
+        ids=self._selected_ids()
+        if not ids:return
+        mb=QMessageBox(self);mb.setWindowTitle("Restore");mb.setText(f"Restore {len(ids)} item(s) from Recycle Bin?")
+        bok=mb.addButton("Restore",QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton()!=bok:return
+        ok=0;fails=[]
+        for rid in ids:
+            done,msg=_recycle_bin.restore_entry(rid)
+            if done:ok+=1
+            else:fails.append(f"#{rid}: {msg}")
+        self._load()
+        msg=f"Restored: {ok}"
+        if fails:msg+=f" | Failed: {len(fails)}"
+        self._set_status(msg)
+        if fails:QMessageBox.warning(self,"Restore Issues","\n".join(fails[:8]))
+    def _delete_selected(self):
+        ids=self._selected_ids()
+        if not ids:return
+        mb=QMessageBox(self);mb.setWindowTitle("Delete Permanently");mb.setText(f"Permanently delete {len(ids)} Recycle Bin item(s)?\n\nThis cannot be undone.")
+        bok=mb.addButton("Delete",QMessageBox.ButtonRole.DestructiveRole)
+        mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton()!=bok:return
+        ok=0;fails=[]
+        for rid in ids:
+            done,msg=_recycle_bin.delete_entry(rid)
+            if done:ok+=1
+            else:fails.append(f"#{rid}: {msg}")
+        self._load()
+        msg=f"Deleted permanently: {ok}"
+        if fails:msg+=f" | Failed: {len(fails)}"
+        self._set_status(msg)
+        if fails:QMessageBox.warning(self,"Delete Issues","\n".join(fails[:8]))
+class _DiagnosticsPage(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
+        t=QLabel("Diagnostics",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
+        self.box=QFrame(self);self.box.setObjectName("ContentFrame")
+        v=QVBoxLayout(self.box);v.setContentsMargins(8,6,8,8);v.setSpacing(6)
+        self.info=QLabel("Inspect local version, database, files, backups, recycle-bin state, and updater health from one page.",self.box);self.info.setObjectName("PageSubTitle");self.info.setWordWrap(True)
+        v.addWidget(self.info,0)
+        act=QHBoxLayout();act.setSpacing(4)
+        self.btn_refresh=QToolButton(self.box);self.btn_refresh.setObjectName("TargetAddBtn");self.btn_refresh.setText("Refresh");self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
+        act.addWidget(self.btn_refresh,0);act.addStretch(1);v.addLayout(act)
+        logs=QGridLayout();logs.setContentsMargins(0,0,0,0);logs.setHorizontalSpacing(8);logs.setVerticalSpacing(4)
+        self.btn_logs_dir=QToolButton(self.box);self.btn_logs_dir.setObjectName("TargetMiniBtn");self.btn_logs_dir.setText("Logs Folder")
+        self.btn_log_note=QToolButton(self.box);self.btn_log_note.setObjectName("TargetMiniBtn");self.btn_log_note.setText("Note Log")
+        self.btn_log_settings=QToolButton(self.box);self.btn_log_settings.setObjectName("TargetMiniBtn");self.btn_log_settings.setText("Settings Log")
+        self.btn_log_target=QToolButton(self.box);self.btn_log_target.setObjectName("TargetMiniBtn");self.btn_log_target.setText("Target Log")
+        self.btn_log_update=QToolButton(self.box);self.btn_log_update.setObjectName("TargetMiniBtn");self.btn_log_update.setText("Update Log")
+        self.btn_log_downgrade=QToolButton(self.box);self.btn_log_downgrade.setObjectName("TargetMiniBtn");self.btn_log_downgrade.setText("Downgrade Log")
+        btns=(self.btn_logs_dir,self.btn_log_note,self.btn_log_settings,self.btn_log_target,self.btn_log_update,self.btn_log_downgrade)
+        for i,b in enumerate(btns):b.setCursor(Qt.CursorShape.PointingHandCursor);logs.addWidget(b,i//3,i%3)
+        v.addLayout(logs)
+        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(10);grid.setVerticalSpacing(4);grid.setColumnStretch(1,1)
+        self.val_version=self._mk_value(self.box);self.val_repo=self._mk_value(self.box);self.val_db=self._mk_value(self.box);self.val_schema=self._mk_value(self.box);self.val_settings=self._mk_value(self.box);self.val_targets=self._mk_value(self.box);self.val_backups=self._mk_value(self.box);self.val_recycle=self._mk_value(self.box);self.val_update=self._mk_value(self.box);self.val_recovery=self._mk_value(self.box)
+        grid.addWidget(QLabel("Current Version",self.box),0,0);grid.addWidget(self.val_version,0,1)
+        grid.addWidget(QLabel("Authenticated Source Repo",self.box),1,0);grid.addWidget(self.val_repo,1,1)
+        grid.addWidget(QLabel("Database Path and Status",self.box),2,0);grid.addWidget(self.val_db,2,1)
+        grid.addWidget(QLabel("Schema Version",self.box),3,0);grid.addWidget(self.val_schema,3,1)
+        grid.addWidget(QLabel("Settings File Status",self.box),4,0);grid.addWidget(self.val_settings,4,1)
+        grid.addWidget(QLabel("Target File Status",self.box),5,0);grid.addWidget(self.val_targets,5,1)
+        grid.addWidget(QLabel("Backup Status",self.box),6,0);grid.addWidget(self.val_backups,6,1)
+        grid.addWidget(QLabel("Recycle Bin Status",self.box),7,0);grid.addWidget(self.val_recycle,7,1)
+        grid.addWidget(QLabel("Last Update Status",self.box),8,0);grid.addWidget(self.val_update,8,1)
+        grid.addWidget(QLabel("Last Downgrade/Recovery Status",self.box),9,0);grid.addWidget(self.val_recovery,9,1)
+        v.addLayout(grid)
+        self.footer=QLabel("",self.box);self.footer.setObjectName("PageSubTitle");self.footer.setWordWrap(True)
+        v.addWidget(self.footer,0)
+        self.footer.hide()
+        root.addWidget(self.box,0)
+        root.addStretch(1)
+        self.btn_refresh.clicked.connect(self._load)
+        self.btn_logs_dir.clicked.connect(lambda:self._open_folder(_health_check.logs_dir(),"Opened logs folder."))
+        self.btn_log_note.clicked.connect(lambda:self._open_log("Note_log.log","Opened note log."))
+        self.btn_log_settings.clicked.connect(lambda:self._open_log("Settings_log.log","Opened settings log."))
+        self.btn_log_target.clicked.connect(lambda:self._open_log("Target_log.log","Opened target log."))
+        self.btn_log_update.clicked.connect(lambda:self._open_log("Update_log.log","Opened update log."))
+        self.btn_log_downgrade.clicked.connect(lambda:self._open_log("Downgrade_log.log","Opened downgrade log."))
+        QTimer.singleShot(0,self._load)
+    def _set_footer(self,msg):
+        text=_norm(msg)
+        self.footer.setText(text)
+        self.footer.setVisible(bool(text))
+    def _mk_value(self,parent):
+        w=QLabel("-",parent);w.setObjectName("PageSubTitle");w.setWordWrap(True);w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);return w
+    def _fmt_iso(self,text):
+        s=_norm(text)
+        if not s:return "-"
+        try:return datetime.fromisoformat(s.replace("Z","+00:00")).strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:return s
+    def _open_folder(self,path,ok_msg):
+        try:os.makedirs(path,exist_ok=True)
+        except Exception:pass
+        ok,err=_open_path_ui(path)
+        self._set_footer(ok_msg if ok else f"Open failed: {err}")
+    def _open_log(self,name,ok_msg):
+        path=os.path.join(_health_check.logs_dir(),name)
+        try:
+            os.makedirs(os.path.dirname(path),exist_ok=True)
+            if not os.path.isfile(path):
+                with open(path,"a",encoding="utf-8"):pass
+        except Exception:pass
+        ok,err=_open_path_ui(path)
+        self._set_footer(ok_msg if ok else f"Open failed: {err}")
+    def _file_status(self,path,label,json_expected=False):
+        p=_norm(path)
+        if not p:return f"{label}: path not set."
+        name=os.path.basename(p) or p
+        if not os.path.isfile(p):return f"{label}: missing | {name}"
+        size=_fmt_size(os.path.getsize(p));mtime=_fmt_mtime(os.path.getmtime(p));status="OK"
+        if json_expected:
+            try:
+                with open(p,"r",encoding="utf-8") as f:json.load(f)
+                status="OK JSON"
+            except Exception as e:
+                err=_norm(e)
+                if len(err)>120:err=err[:117]+"..."
+                status=f"Invalid JSON ({err})"
+        return f"{label}: {status} | {size} | updated {mtime} | {name}"
+    def _db_info(self):
+        p=_db_path();out={"path":p,"ok":False,"schema":0,"summary":f"Database path not set."}
+        if not p:return out
+        if not os.path.isfile(p):
+            out["summary"]=f"Missing database file | {os.path.basename(p) or p}"
+            return out
+        size=_fmt_size(os.path.getsize(p));mtime=_fmt_mtime(os.path.getmtime(p));name=os.path.basename(p) or p
+        con=None
+        try:
+            con=sqlite3.connect(p)
+            cur=con.cursor()
+            cur.execute("PRAGMA user_version")
+            row=cur.fetchone();schema=_to_int((row[0] if row else 0),0)
+            counts={};fails=[]
+            for name in ("Notes","CommandsNotes","Commands","RecycleBin"):
+                try:
+                    cur.execute(f"SELECT COUNT(*) FROM {name}")
+                    crow=cur.fetchone();counts[name]=_to_int((crow[0] if crow else 0),0)
+                except Exception:
+                    counts[name]="?";fails.append(name)
+            out["ok"]=True;out["schema"]=schema
+            out["summary"]=f"OK | {name} | {size} | updated {mtime} | Notes {counts.get('Notes',0)} | CommandsNotes {counts.get('CommandsNotes',0)} | Commands {counts.get('Commands',0)} | RecycleBin {counts.get('RecycleBin',0)}"
+            if fails:out["summary"]+=f" | Count unavailable: {', '.join(fails)}"
+            return out
+        except Exception as e:
+            err=_norm(e)
+            if len(err)>140:err=err[:137]+"..."
+            out["summary"]=f"Open failed ({err}) | {name} | {size} | updated {mtime}"
+            return out
+        finally:
+            try:
+                if con is not None:con.close()
+            except Exception:pass
+    def _schema_text(self,schema,db_ok):
+        if not db_ok:return f"Unavailable | expected {DB_SCHEMA_VERSION}"
+        if int(schema)==int(DB_SCHEMA_VERSION):return f"{schema} | matches expected {DB_SCHEMA_VERSION}"
+        if int(schema)<int(DB_SCHEMA_VERSION):return f"{schema} | expected {DB_SCHEMA_VERSION} | older schema detected"
+        return f"{schema} | expected {DB_SCHEMA_VERSION} | newer than this build"
+    def _backups_text(self):
+        bdir=_backups_dir();sdir=_old_versions_dir()
+        try:data_rows=sorted([str(x) for x in Path(bdir).glob("*.zip") if x.is_file()],key=lambda x:os.path.getmtime(x),reverse=True)
+        except Exception:data_rows=[]
+        snap_rows=_list_code_snapshots()
+        data_txt=f"Data backups: {len(data_rows)}"
+        if data_rows:data_txt+=f" | latest {os.path.basename(data_rows[0])} | {_fmt_mtime(os.path.getmtime(data_rows[0]))}"
+        else:data_txt+=" | none yet"
+        snap_txt=f"Code snapshots: {len(snap_rows)}"
+        if snap_rows:snap_txt+=f" | latest {os.path.basename(snap_rows[0][0])} | {_fmt_mtime(snap_rows[0][1])}"
+        else:snap_txt+=" | none yet"
+        return data_txt+"\n"+snap_txt
+    def _recycle_text(self):
+        try:rows=_recycle_bin.list_entries()
+        except Exception as e:return "Recycle Bin unavailable: "+_norm(e)
+        counts={_recycle_bin.TYPE_NOTE:0,_recycle_bin.TYPE_COMMAND:0,_recycle_bin.TYPE_TARGET:0}
+        for row in rows:
+            typ=_norm(row.get("entity_type",""))
+            if typ in counts:counts[typ]+=1
+        return f"{len(rows)} item(s) | Notes {counts.get(_recycle_bin.TYPE_NOTE,0)} | Commands {counts.get(_recycle_bin.TYPE_COMMAND,0)} | Targets {counts.get(_recycle_bin.TYPE_TARGET,0)} | retention {_recycle_bin.RETENTION_DAYS} days"
+    def _update_status_text(self,state):
+        st=state if isinstance(state,dict) else {}
+        cur=_norm(st.get("current_version",""));latest=_norm(st.get("last_available_version",""));pending=_norm(st.get("pending_version",""));err=_norm(st.get("last_error",""))
+        if err:base="Error: "+err
+        elif st.get("update_in_progress"):
+            if pending and cur and pending==cur:base=f"Installed update {pending}. Waiting for first successful launch confirmation."
+            else:base=f"Update in progress to {pending or latest or '?'}."
+        elif pending:base=f"Pending update detected for {pending}."
+        elif cur and latest:
+            try:
+                cmpv=_compare_update_versions(latest,cur)
+                if cmpv>0:base=f"New version available: {latest}."
+                elif cmpv==0:base="You are on the latest version."
+                else:base=f"Current version {cur} is newer than recorded release {latest}."
+            except Exception:base=f"Latest authenticated release: {latest}."
+        elif latest:base=f"Latest authenticated release: {latest}."
+        else:base="Not checked yet."
+        parts=[base]
+        if st.get("last_checked"):parts.append("Last checked "+self._fmt_iso(st.get("last_checked","")))
+        if st.get("last_good_version"):parts.append("Last good "+_norm(st.get("last_good_version","")))
+        up_log=os.path.join(_health_check.logs_dir(),"Update_log.log")
+        if os.path.isfile(up_log):parts.append("Update log "+_fmt_mtime(os.path.getmtime(up_log)))
+        return " | ".join([p for p in parts if _norm(p)])
+    def _recovery_text(self,state):
+        st=state if isinstance(state,dict) else {}
+        parts=[]
+        if st.get("last_launch_ok"):parts.append("Last launch OK")
+        else:parts.append("Last launch issue detected")
+        if st.get("last_launch_started_at"):parts.append("Started "+self._fmt_iso(st.get("last_launch_started_at","")))
+        if st.get("last_launch_completed_at"):parts.append("Completed "+self._fmt_iso(st.get("last_launch_completed_at","")))
+        if st.get("last_launch_error"):parts.append("Error: "+_norm(st.get("last_launch_error","")))
+        dlog=os.path.join(_health_check.logs_dir(),"Downgrade_log.log")
+        if os.path.isfile(dlog):parts.append("Downgrade log "+_fmt_mtime(os.path.getmtime(dlog)))
+        else:parts.append("No downgrade or recovery log yet.")
+        return " | ".join([p for p in parts if _norm(p)])
+    def _load(self,*_):
+        ident=_get_app_identity();state=_get_update_state();db=self._db_info()
+        self.val_version.setText(_norm(ident.get("display_version","")) or _norm(ident.get("version","")) or "-")
+        repo=(_norm(state.get("source_repo","")) or _UP_REPO_URL)
+        inst_tag=_norm(state.get("source_tag",""))
+        latest_tag=_norm(state.get("last_available_tag",""))
+        if inst_tag:repo+=f" | installed tag {inst_tag}"
+        if latest_tag and latest_tag!=inst_tag:repo+=f" | latest tag {latest_tag}"
+        repo_text=_short_mid(repo,84);db_text=db.get("summary","-")
+        settings_text=self._file_status(_settings_path(),"settings.json",True)
+        targets_text=self._file_status(_targets_path(),"Targets.json",True)+"\n"+self._file_status(_targets_values_path(),"target_values.json",True)
+        backups_text=self._backups_text();update_text=self._update_status_text(state);recovery_text=self._recovery_text(state)
+        self.val_repo.setText(repo_text);self.val_repo.setToolTip(repo)
+        self.val_db.setText(_short_mid(db_text,140));self.val_db.setToolTip(db_text)
+        self.val_schema.setText(self._schema_text(db.get("schema",0),db.get("ok",False)))
+        self.val_settings.setText(_short_mid(settings_text,110));self.val_settings.setToolTip(settings_text)
+        self.val_targets.setText(_short_mid(targets_text,140));self.val_targets.setToolTip(targets_text)
+        self.val_backups.setText(_short_mid(backups_text,140));self.val_backups.setToolTip(backups_text)
+        self.val_recycle.setText(self._recycle_text())
+        self.val_update.setText(_short_mid(update_text,140));self.val_update.setToolTip(update_text)
+        self.val_recovery.setText(_short_mid(recovery_text,120));self.val_recovery.setToolTip(recovery_text)
+        self._set_footer("")
 class _ImportExportPage(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -2073,12 +2840,21 @@ class _ImportExportPage(QWidget):
             QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
     def _notes_export(self,kind):
         if not self._ensure_db():return
-        names=self.db.list_note_names()
-        if not names:
+        notes=self.db.list_note_refs()
+        if not notes:
             QMessageBox.information(self,"Notes Export","No notes found.")
             return
-        name,ok=QInputDialog.getItem(self,"Export Note","Note",names,0,False)
-        if not ok or not name:return
+        labels=[];label_map={}
+        for it in notes:
+            name=_norm(it.get("note_name",""))
+            if not name:continue
+            grp=_norm(it.get("group_name",""))
+            label=f"{grp} | {name}" if grp else f"Ungrouped | {name}"
+            labels.append(label);label_map[label]=name
+        name_label,ok=QInputDialog.getItem(self,"Export Note","Note",labels,0,False)
+        if not ok or not name_label:return
+        name=label_map.get(name_label,"")
+        if not name:return
         base=_abs("..")
         safe=_safe_filename(name,fallback="note")
         if kind=="md":
@@ -2123,16 +2899,14 @@ class _ImportExportPage(QWidget):
         try:
             incoming=self.tv.parse_json(p) if kind=="json" else self.tv.parse_csv(p)
             plan=self.tv.build_plan(incoming,base)
-            dups=[{"table":"TargetValues","key":_norm(d.get("key","")),"existing":f'{_norm(d.get("existing_key",""))}:{int((d.get("existing") or {}).get("priority",(d.get("existing") or {}).get("value",0)) or 0)}',"incoming":f'{_norm(d.get("key",""))}:{int((d.get("incoming") or {}).get("priority",(d.get("incoming") or {}).get("value",0)) or 0)}',"in_cmd":""} for d in (plan.get("dups") or [])]
         finally:
             prog.close()
-        decisions={}
-        if dups:
-            dlg=_DupDialog(self,"Target Values Duplicates",dups)
-            if dlg.exec()!=QDialog.DialogCode.Accepted:
-                self.tv_status.setText("Import cancelled.")
-                return
-            decisions=dlg.decisions()
+        dups=[{"table":"TargetValues","key":_norm(d.get("key","")),"existing":f'{_norm(d.get("existing_key",""))}:{int((d.get("existing") or {}).get("priority",(d.get("existing") or {}).get("value",0)) or 0)}',"incoming":f'{_norm(d.get("key",""))}:{int((d.get("incoming") or {}).get("priority",(d.get("incoming") or {}).get("value",0)) or 0)}',"in_cmd":""} for d in (plan.get("dups") or [])]
+        dlg=_ImportPreviewDialog(self,"Import Preview",plan,dups,source_label=os.path.basename(p))
+        if dlg.exec()!=QDialog.DialogCode.Accepted:
+            self.tv_status.setText("Import cancelled.")
+            return
+        decisions=dlg.decisions()
         res=self.tv.apply_plan(base,plan,decisions)
         self.tv.save(base)
         self.tv_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
@@ -2157,16 +2931,14 @@ class _ImportExportPage(QWidget):
         try:
             incoming=self.tg.parse_json(p)
             plan=self.tg.build_plan(incoming,base)
-            dups=[{"table":"Targets","key":_norm(d.get("key","")),"existing":self.tg._summ(d.get("existing")),"incoming":self.tg._summ(d.get("incoming")),"in_cmd":""} for d in (plan.get("dups") or [])]
         finally:
             prog.close()
-        decisions={}
-        if dups:
-            dlg=_DupDialog(self,"Targets Duplicates",dups)
-            if dlg.exec()!=QDialog.DialogCode.Accepted:
-                self.tg_status.setText("Import cancelled.")
-                return
-            decisions=dlg.decisions()
+        dups=[{"table":"Targets","key":_norm(d.get("key","")),"existing":self.tg._summ(d.get("existing")),"incoming":self.tg._summ(d.get("incoming")),"in_cmd":""} for d in (plan.get("dups") or [])]
+        dlg=_ImportPreviewDialog(self,"Import Preview",plan,dups,source_label=os.path.basename(p))
+        if dlg.exec()!=QDialog.DialogCode.Accepted:
+            self.tg_status.setText("Import cancelled.")
+            return
+        decisions=dlg.decisions()
         base,res=self.tg.apply_plan(base,plan,decisions)
         self.tg.save(base)
         self.tg_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
@@ -2306,21 +3078,21 @@ class _TagsPage(QWidget):
 class _SecurityPage(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent)
-        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
-        top=QHBoxLayout();top.setContentsMargins(14,14,14,0);top.setSpacing(10)
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
         t=QLabel("Security",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
         box=QFrame(self);box.setObjectName("ContentFrame")
-        v=QVBoxLayout(box);v.setContentsMargins(14,14,14,14);v.setSpacing(10)
-        info=QLabel("Protect access and encrypt the database at rest.",box);info.setObjectName("PageSubTitle")
+        v=QVBoxLayout(box);v.setContentsMargins(8,6,8,8);v.setSpacing(4)
+        info=QLabel("Protect access and encrypt the database at rest.",box);info.setObjectName("PageSubTitle");info.setWordWrap(True)
         v.addWidget(info,0)
-        row1=QHBoxLayout();row1.setSpacing(10)
+        row1=QHBoxLayout();row1.setSpacing(4)
         self.chk_lock=QCheckBox("Enable app lock on start",box)
         self.btn_set_pin=QToolButton(box);self.btn_set_pin.setObjectName("TargetAddBtn");self.btn_set_pin.setText("Set/Change PIN")
         row1.addWidget(self.chk_lock,0);row1.addWidget(self.btn_set_pin,0);row1.addStretch(1)
         v.addLayout(row1)
         self.pin_status=QLabel("",box);self.pin_status.setObjectName("PageSubTitle")
         v.addWidget(self.pin_status,0)
-        row2=QHBoxLayout();row2.setSpacing(10)
+        row2=QHBoxLayout();row2.setSpacing(4)
         self.chk_enc=QCheckBox("Enable database encryption (at rest)",box)
         row2.addWidget(self.chk_enc,0);row2.addStretch(1)
         v.addLayout(row2)
@@ -2328,12 +3100,17 @@ class _SecurityPage(QWidget):
         v.addWidget(self.enc_status,0)
         self.status=QLabel("",box);self.status.setObjectName("PageSubTitle")
         v.addWidget(self.status,0)
-        root.addWidget(box,1)
+        self.status.hide()
+        root.addWidget(box,0)
+        root.addStretch(1)
         self.btn_set_pin.clicked.connect(self._set_pin)
         self.chk_lock.stateChanged.connect(self._toggle_lock)
         self.chk_enc.stateChanged.connect(self._toggle_enc)
         QTimer.singleShot(0,self._load)
-    def _set_status(self,msg):self.status.setText(_norm(msg))
+    def _set_status(self,msg):
+        text=_norm(msg)
+        self.status.setText(text)
+        self.status.setVisible(bool(text))
     def _load(self):
         cfg=_get_security_settings()
         for w in (self.chk_lock,self.chk_enc):
@@ -2459,30 +3236,117 @@ class Widget(QWidget):
         self.btn_ie=QToolButton(self.sidebar);self.btn_ie.setObjectName("NavBtn");self.btn_ie.setText("Import & Export");self.btn_ie.setCheckable(True)
         self.btn_tags=QToolButton(self.sidebar);self.btn_tags.setObjectName("NavBtn");self.btn_tags.setText("Tags");self.btn_tags.setCheckable(True)
         self.btn_security=QToolButton(self.sidebar);self.btn_security.setObjectName("NavBtn");self.btn_security.setText("Security");self.btn_security.setCheckable(True)
+        self.btn_update=QToolButton(self.sidebar);self.btn_update.setObjectName("NavBtn");self.btn_update.setText("Update");self.btn_update.setCheckable(True)
+        self.btn_recycle=QToolButton(self.sidebar);self.btn_recycle.setObjectName("NavBtn");self.btn_recycle.setText("Recycle Bin");self.btn_recycle.setCheckable(True)
+        self.btn_diag=QToolButton(self.sidebar);self.btn_diag.setObjectName("NavBtn");self.btn_diag.setText("Diagnostics");self.btn_diag.setCheckable(True)
         self.btn_backup.clicked.connect(lambda:self._nav(0))
         self.btn_ie.clicked.connect(lambda:self._nav(1))
         self.btn_tags.clicked.connect(lambda:self._nav(2))
         self.btn_security.clicked.connect(lambda:self._nav(3))
-        sv.addWidget(self.btn_backup,0);sv.addWidget(self.btn_ie,0);sv.addWidget(self.btn_tags,0);sv.addWidget(self.btn_security,0);sv.addStretch(1)
-        self.stack=QStackedWidget(self);self.stack.setObjectName("Stack")
+        self.btn_update.clicked.connect(lambda:self._nav(4))
+        self.btn_recycle.clicked.connect(lambda:self._nav(5))
+        self.btn_diag.clicked.connect(lambda:self._nav(6))
+        sv.addWidget(self.btn_backup,0);sv.addWidget(self.btn_ie,0);sv.addWidget(self.btn_tags,0);sv.addWidget(self.btn_security,0);sv.addWidget(self.btn_update,0);sv.addWidget(self.btn_recycle,0);sv.addWidget(self.btn_diag,0);sv.addStretch(1)
+        self.stack=_CurrentPageStack(self);self.stack.setObjectName("Stack")
         self.page_backup=_BackupPage(self.stack)
         self.page_ie=_ImportExportPage(self.stack)
         self.page_tags=_TagsPage(self.stack)
         self.page_security=_SecurityPage(self.stack)
-        self.stack.addWidget(self.page_backup);self.stack.addWidget(self.page_ie);self.stack.addWidget(self.page_tags);self.stack.addWidget(self.page_security)
+        self.page_update=_UpdatePage(self.stack)
+        self.page_recycle=_RecycleBinPage(self.stack)
+        self.page_diag=_DiagnosticsPage(self.stack)
+        self.stack.addWidget(self.page_backup);self.stack.addWidget(self.page_ie);self.stack.addWidget(self.page_tags);self.stack.addWidget(self.page_security);self.stack.addWidget(self.page_update);self.stack.addWidget(self.page_recycle);self.stack.addWidget(self.page_diag)
         self.scroll=QScrollArea(self);self.scroll.setObjectName("SettingsScroll")
-        self.scroll.setWidgetResizable(True)
+        self.scroll.setWidgetResizable(False)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.scroll.setAlignment(Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignLeft)
         self.scroll.setWidget(self.stack)
+        self.scroll.viewport().installEventFilter(self)
         root.addWidget(self.sidebar,0);root.addWidget(self.scroll,1)
         QTimer.singleShot(0,self._sync_button_sizes)
+        QTimer.singleShot(0,self._sync_stack_height)
+        QTimer.singleShot(0,self._scroll_top)
         self._nav(0)
+    def eventFilter(self,obj,e):
+        try:
+            if obj is self.scroll.viewport() and e is not None and e.type()==QEvent.Type.Resize:self._schedule_stack_sync()
+        except Exception:pass
+        return super().eventFilter(obj,e)
+    def _sync_stack_height(self):
+        try:
+            view=self.scroll.viewport()
+            view_w=max(0,int(view.width()))
+            view_h=max(0,int(view.height()))
+        except Exception:
+            view_w=0;view_h=0
+        cur=self.stack.currentWidget()
+        hint=0;used=0;hfw=0
+        if cur is not None:
+            lay=cur.layout()
+            if lay is not None:
+                try:lay.activate()
+                except Exception:pass
+                if view_w>0:
+                    try:
+                        if lay.hasHeightForWidth():hfw=int(lay.totalHeightForWidth(view_w))
+                    except Exception:pass
+                try:
+                    for i in range(lay.count()):
+                        it=lay.itemAt(i)
+                        if it is None or it.spacerItem() is not None:continue
+                        g=it.geometry()
+                        used=max(used,int(g.y()+g.height()))
+                except Exception:pass
+            if isinstance(cur,_DiagnosticsPage) and hfw>0:hint=max(used,hfw)
+            elif used>0:hint=used
+            else:
+                if hfw>0:hint=max(hint,hfw)
+                try:hint=max(hint,int(cur.minimumSizeHint().height()))
+                except Exception:pass
+                try:hint=max(hint,int(cur.sizeHint().height()))
+                except Exception:pass
+        expand_pages=(_BackupPage,_ImportExportPage,_TagsPage,_RecycleBinPage)
+        target=(max(view_h,0) if isinstance(cur,expand_pages) else max(hint,0))
+        width=max(view_w,0)
+        if width>0 and (self.stack.width()!=width or self.stack.height()!=target):self.stack.setFixedSize(width,target)
+    def _scroll_top(self):
+        try:self.scroll.verticalScrollBar().setValue(0)
+        except Exception:pass
+        try:self.scroll.horizontalScrollBar().setValue(0)
+        except Exception:pass
+    def _schedule_scroll_top(self):
+        QTimer.singleShot(0,self._scroll_top)
+    def _schedule_stack_sync(self):
+        QTimer.singleShot(0,self._sync_stack_height)
+    def on_page_activated(self):
+        self._schedule_stack_sync()
+        self._schedule_scroll_top()
+    def showEvent(self,e):
+        try:super().showEvent(e)
+        except Exception:pass
+        self._schedule_stack_sync()
+        self._schedule_scroll_top()
+    def resizeEvent(self,e):
+        try:super().resizeEvent(e)
+        except Exception:pass
+        self._schedule_stack_sync()
     def _nav(self,i):
-        self.btn_backup.blockSignals(True);self.btn_ie.blockSignals(True);self.btn_tags.blockSignals(True);self.btn_security.blockSignals(True)
-        self.btn_backup.setChecked(i==0);self.btn_ie.setChecked(i==1);self.btn_tags.setChecked(i==2);self.btn_security.setChecked(i==3)
-        self.btn_backup.blockSignals(False);self.btn_ie.blockSignals(False);self.btn_tags.blockSignals(False);self.btn_security.blockSignals(False)
+        self.btn_backup.blockSignals(True);self.btn_ie.blockSignals(True);self.btn_tags.blockSignals(True);self.btn_security.blockSignals(True);self.btn_update.blockSignals(True);self.btn_recycle.blockSignals(True);self.btn_diag.blockSignals(True)
+        self.btn_backup.setChecked(i==0);self.btn_ie.setChecked(i==1);self.btn_tags.setChecked(i==2);self.btn_security.setChecked(i==3);self.btn_update.setChecked(i==4);self.btn_recycle.setChecked(i==5);self.btn_diag.setChecked(i==6)
+        self.btn_backup.blockSignals(False);self.btn_ie.blockSignals(False);self.btn_tags.blockSignals(False);self.btn_security.blockSignals(False);self.btn_update.blockSignals(False);self.btn_recycle.blockSignals(False);self.btn_diag.blockSignals(False)
         self.stack.setCurrentIndex(i)
+        if i==0:
+            try:self.page_backup._schedule_table_refresh()
+            except Exception:pass
+        elif i==5:
+            try:self.page_recycle._load()
+            except Exception:pass
+        elif i==6:
+            try:self.page_diag._load()
+            except Exception:pass
+        self._schedule_stack_sync()
+        self._schedule_scroll_top()
     def _sync_button_sizes(self):
         nav=[b for b in self.findChildren(QToolButton) if b.objectName()=="NavBtn" and _norm(b.text())]
         act=[b for b in self.findChildren(QToolButton) if b.objectName() in ("TargetAddBtn","TargetMiniBtn","TargetSaveBtn","TargetCancelBtn") and _norm(b.text())]
@@ -2491,6 +3355,8 @@ class Widget(QWidget):
             if w<170:w=170
             for b in nav:b.setFixedHeight(44);b.setFixedWidth(w)
         if act:
-            fm=QFontMetrics(act[0].font());w=max(fm.horizontalAdvance(_norm(b.text())) for b in act)+40
-            if w<160:w=160
-            for b in act:b.setFixedHeight(30);b.setFixedWidth(w)
+            for b in act:
+                fm=QFontMetrics(b.font());w=fm.horizontalAdvance(_norm(b.text()))+34
+                if w<118:w=118
+                b.setFixedHeight(30)
+                b.setFixedWidth(w)

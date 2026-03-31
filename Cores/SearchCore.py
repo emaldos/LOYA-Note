@@ -4,6 +4,8 @@ from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QTimer,QPoint
 from PyQt6.QtGui import QAction,QFontMetrics
 from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLineEdit,QComboBox,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QMenu,QApplication,QSizePolicy,QListWidget,QListWidgetItem,QSplitter,QLabel,QInputDialog,QMessageBox
+from Cores import common_db as _common_db
+from Cores import note_refs as _note_refs
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -42,64 +44,14 @@ def _safe_mtime(p):
     try:return os.path.getmtime(p) if p and os.path.isfile(p) else None
     except:return None
 def _db_path():
-    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
-    return os.path.join(d,"Note_LOYA_V1.db")
-DB_SCHEMA_VERSION=2
+    return _common_db.db_path()
+DB_SCHEMA_VERSION=_common_db.DB_SCHEMA_VERSION
 def _table_cols(cur,t):
-    try:cur.execute(f"PRAGMA table_info({t})");return [r[1] for r in cur.fetchall()]
-    except:return []
+    return _common_db.table_cols(cur,t)
 def _ensure_schema(con):
-    try:
-        con.execute("CREATE TABLE IF NOT EXISTS CommandsNotes(id INTEGER PRIMARY KEY AUTOINCREMENT,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,created_at TEXT,updated_at TEXT)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_note_name ON CommandsNotes(note_name)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_category ON CommandsNotes(category)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_sub_category ON CommandsNotes(sub_category)")
-    except:pass
-    try:
-        con.execute("CREATE TABLE IF NOT EXISTS Commands(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,created_at TEXT,updated_at TEXT)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_id ON Commands(note_id)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_note_name ON Commands(note_name)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_category ON Commands(category)")
-        con.execute("CREATE INDEX IF NOT EXISTS idx_cmd_sub_category ON Commands(sub_category)")
-    except:pass
-    _apply_migrations(con)
-    try:con.commit()
-    except:pass
+    _common_db.ensure_schema(con)
 def _apply_migrations(con):
-    try:cur=con.cursor()
-    except:return
-    try:
-        cur.execute("PRAGMA user_version")
-        row=cur.fetchone()
-        ver=int(row[0]) if row and str(row[0]).isdigit() else 0
-    except:ver=0
-    now=datetime.now(timezone.utc).isoformat()
-    try:cur.execute("CREATE TABLE IF NOT EXISTS SchemaMigrations(version INTEGER PRIMARY KEY,applied_at TEXT)")
-    except:pass
-    if ver<1:
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(1,?)",(now,))
-        except:pass
-        ver=1
-    if ver<2:
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS NotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,note_id INTEGER,note_name TEXT,content TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_notes_hist_note_id ON NotesHistory(note_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsNotesHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_name TEXT,category TEXT,sub_category TEXT,command TEXT,tags TEXT,description TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmdn_hist_cmd_id ON CommandsNotesHistory(cmd_id)")
-        except:pass
-        try:
-            cur.execute("CREATE TABLE IF NOT EXISTS CommandsHistory(id INTEGER PRIMARY KEY AUTOINCREMENT,cmd_id INTEGER,note_id INTEGER,note_name TEXT,cmd_note_title TEXT,category TEXT,sub_category TEXT,description TEXT,tags TEXT,command TEXT,action TEXT,action_at TEXT)")
-            cur.execute("CREATE INDEX IF NOT EXISTS idx_cmd_hist_cmd_id ON CommandsHistory(cmd_id)")
-        except:pass
-        try:cur.execute("INSERT OR IGNORE INTO SchemaMigrations(version,applied_at) VALUES(2,?)",(now,))
-        except:pass
-        ver=2
-    try:cur.execute(f"PRAGMA user_version={DB_SCHEMA_VERSION}")
-    except:pass
-    try:con.commit()
-    except:pass
+    _common_db.apply_migrations(con)
 def _load_cmds(dbp=None):
     p=dbp or _db_path()
     if not p or not os.path.isfile(p):
@@ -109,6 +61,17 @@ def _load_cmds(dbp=None):
         con=sqlite3.connect(p);_ensure_schema(con)
         cur=con.cursor()
         out=[]
+        note_groups_by_id={};note_groups_by_name={}
+        notes_cols=set(_table_cols(cur,"Notes"))
+        if {"id","note_name"}.issubset(notes_cols):
+            sel="id,note_name"+(",group_name" if "group_name" in notes_cols else "")
+            cur.execute(f"SELECT {sel} FROM Notes")
+            for r in cur.fetchall():
+                gid=_norm(r[2]) if "group_name" in notes_cols and len(r)>2 else ""
+                try:note_groups_by_id[int(r[0])]=gid
+                except Exception:pass
+                nn=_norm(r[1])
+                if nn:note_groups_by_name[nn.lower()]=gid
         cn=set(_table_cols(cur,"CommandsNotes"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cn):
             has_desc="description" in cn
@@ -117,21 +80,30 @@ def _load_cmds(dbp=None):
             for r in cur.fetchall():
                 rid=r[0];nn=r[1];c=r[2];sc=r[3];cmd=r[4];tags=r[5];desc=(r[6] if has_desc else "")
                 title=_norm(nn) or "Untitled"
-                out.append({"id":int(rid),"src":"CommandsNotes","title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
+                out.append({"id":int(rid),"src":"CommandsNotes","group_name":"","title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
         cc=set(_table_cols(cur,"Commands"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cc):
             has_desc="description" in cc
             has_title="cmd_note_title" in cc
-            sel="id,note_name,category,sub_category,command,tags"+(",description" if has_desc else "")+(",cmd_note_title" if has_title else "")
+            has_note_id="note_id" in cc
+            sel="id"+(",note_id" if has_note_id else "")+",note_name,category,sub_category,command,tags"+(",description" if has_desc else "")+(",cmd_note_title" if has_title else "")
             cur.execute(f"SELECT {sel} FROM Commands ORDER BY id DESC")
             for r in cur.fetchall():
-                rid=r[0];nn=r[1];c=r[2];sc=r[3];cmd=r[4];tags=r[5]
-                off=6
+                off=0
+                rid=r[off];off+=1
+                note_id=(r[off] if has_note_id else None);off+=1 if has_note_id else 0
+                nn=r[off];off+=1
+                c=r[off];off+=1
+                sc=r[off];off+=1
+                cmd=r[off];off+=1
+                tags=r[off];off+=1
                 desc=(r[off] if has_desc else "");off+=1 if has_desc else 0
                 ttl=(r[off] if has_title else "")
                 base=_norm(nn) or "Untitled"
                 title=_norm(ttl) or base
-                out.append({"id":int(rid),"src":"Commands","title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
+                nid=_note_refs.note_ref_id(note_id=note_id)
+                grp=note_groups_by_id.get(nid,"") if nid is not None else note_groups_by_name.get(_norm(nn).lower(),"")
+                out.append({"id":int(rid),"src":"Commands","note_id":nid,"note_name":_norm(nn),"group_name":grp,"title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
         con.close()
         _log("[+]",f"Loaded search cmds: {len(out)} from {os.path.basename(p)}")
         return p,out
@@ -167,11 +139,72 @@ def _write_json(p,obj):
 def _searches_path():
     d=_abs("..","Data");os.makedirs(d,exist_ok=True)
     return os.path.join(d,"saved_searches.json")
+def _recent_searches_path():
+    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
+    return os.path.join(d,"recent_searches.json")
+def _norm_filters(filters):
+    data=filters if isinstance(filters,dict) else {}
+    return {"src":_norm(data.get("src","All")) or "All","group":_norm(data.get("group","All")) or "All","category":_norm(data.get("category","All")) or "All","sub":_norm(data.get("sub","All")) or "All","tag":_norm(data.get("tag","All")) or "All"}
+def _normalize_search_entry(item,name=""):
+    data=item if isinstance(item,dict) else {}
+    out={"name":_norm(data.get("name",name)),"query":_norm(data.get("query","")),"mode":_norm(data.get("mode","Keyword")) or "Keyword","filters":_norm_filters(data.get("filters",{})),"captured_at":_norm(data.get("captured_at",""))}
+    return out
+def _entry_signature(item):
+    entry=_normalize_search_entry(item)
+    return json.dumps({"query":entry.get("query",""),"mode":entry.get("mode","Keyword"),"filters":entry.get("filters",{})},sort_keys=True,ensure_ascii=False)
+def _fmt_when(text):
+    s=_norm(text)
+    if not s:return "-"
+    try:return datetime.fromisoformat(s.replace("Z","+00:00")).strftime("%Y-%m-%d %H:%M")
+    except Exception:return s[:16].replace("T"," ")
+def _entry_summary(item):
+    entry=_normalize_search_entry(item)
+    parts=[]
+    q=_norm(entry.get("query",""))
+    if q:parts.append(q)
+    filters=entry.get("filters",{}) if isinstance(entry.get("filters",{}),dict) else {}
+    for key,label in (("src","src"),("group","group"),("category","cat"),("sub","sub"),("tag","tag")):
+        val=_norm(filters.get(key,"All"))
+        if val and val!="All":parts.append(f"{label}={val}")
+    if entry.get("mode","Keyword")!="Keyword":parts.append("mode="+_norm(entry.get("mode","Keyword")))
+    return " | ".join(parts) if parts else "Current filters"
+def _recent_entry_label(item):
+    entry=_normalize_search_entry(item)
+    return f"{_fmt_when(entry.get('captured_at',''))} | {_entry_summary(entry)}"
 def _load_searches():
     d=_read_json(_searches_path(),[])
-    return d if isinstance(d,list) else []
+    if not isinstance(d,list):return []
+    out=[]
+    for it in d:
+        entry=_normalize_search_entry(it)
+        if _norm(entry.get("name","")):out.append(entry)
+    return out
 def _save_searches(items):
-    return _write_json(_searches_path(),items or [])
+    out=[]
+    for it in (items or []):
+        entry=_normalize_search_entry(it)
+        if _norm(entry.get("name","")):out.append(entry)
+    return _write_json(_searches_path(),out)
+def _load_recent_searches():
+    d=_read_json(_recent_searches_path(),[])
+    if not isinstance(d,list):return []
+    out=[];seen=set()
+    for it in d:
+        entry=_normalize_search_entry(it)
+        sig=_entry_signature(entry)
+        if sig in seen:continue
+        seen.add(sig)
+        if _entry_summary(entry)!="Current filters":out.append(entry)
+    return out[:20]
+def _save_recent_searches(items):
+    out=[];seen=set()
+    for it in (items or []):
+        entry=_normalize_search_entry(it)
+        sig=_entry_signature(entry)
+        if sig in seen:continue
+        seen.add(sig)
+        if _entry_summary(entry)!="Current filters":out.append(entry)
+    return _write_json(_recent_searches_path(),out[:20])
 def _split_tags(s):
     if not s:return []
     raw=str(s).replace(";",",").split(",")
@@ -183,6 +216,29 @@ def _split_tags(s):
         if k in seen:continue
         seen.add(k);out.append(t)
     return out
+def _title_text(n):
+    title=_norm(n.get("title","")) or "Untitled"
+    grp=_norm(n.get("group_name",""))
+    return f"[{grp}] {title}" if grp else title
+def _row_preview(n,cmd_disp):
+    title=_title_text(n)
+    meta=[]
+    src=_norm(n.get("src",""))
+    if src=="Commands":meta.append("Linked")
+    elif src=="CommandsNotes":meta.append("Standalone")
+    note_name=_norm(n.get("note_name",""))
+    if note_name and note_name!=_norm(n.get("title","")):meta.append("Note: "+note_name)
+    cat=_norm(n.get("category",""));sub=_norm(n.get("sub",""))
+    if cat or sub:meta.append((cat+" / "+sub).strip(" /"))
+    tags=_norm(n.get("tags",""))
+    if tags:meta.append("Tags: "+tags)
+    desc=_clean_cmd(n.get("description",""))
+    cmd=_clean_cmd(cmd_disp or n.get("command",""))
+    lines=[title]
+    if meta:lines.append(" | ".join(meta))
+    if desc:lines.append("Desc: "+_ell(desc,220))
+    if cmd:lines.append("Cmd: "+_ell(cmd,260))
+    return "\n".join([x for x in lines if _norm(x)])
 class LiveTargetContext:
     def __init__(self):
         self.path=_targets_path()
@@ -231,7 +287,7 @@ class Table_Style(QWidget):
     def __init__(self,on_copy,get_cmd,parent=None):
         super().__init__(parent)
         self._notes=[];self._view=[];self._q="";self._mode="Keyword";self._on_copy=on_copy;self._get_cmd=get_cmd
-        self._src_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
+        self._src_filter="All";self._group_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
         self._auto_cols=True;self._auto_limit=200
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.wrap=QFrame(self);self.wrap.setObjectName("HomeTableFrame");root.addWidget(self.wrap,1)
@@ -275,8 +331,9 @@ class Table_Style(QWidget):
         self._q=_norm(q)
         self._mode=mode or "Keyword"
         self._apply()
-    def set_filters(self,src,cat,sub,tag,apply=True):
+    def set_filters(self,src,group,cat,sub,tag,apply=True):
         self._src_filter=src or "All"
+        self._group_filter=group or "All"
         self._cat_filter=cat or "All"
         self._sub_filter=sub or "All"
         self._tag_filter=tag or "All"
@@ -307,6 +364,8 @@ class Table_Style(QWidget):
         src=_norm(self._src_filter)
         if src=="Linked" and _norm(n.get("src",""))!="Commands":return False
         if src=="Not Linked" and _norm(n.get("src",""))!="CommandsNotes":return False
+        group=_norm(self._group_filter)
+        if group!="All" and _l(n.get("group_name",""))!=_l(group):return False
         cat=_norm(self._cat_filter)
         if cat!="All" and _l(n.get("category",""))!=_l(cat):return False
         sub=_norm(self._sub_filter)
@@ -317,6 +376,7 @@ class Table_Style(QWidget):
             if _l(tag) not in [x.lower() for x in tags]:return False
         qq=_l(q)
         if not qq:return True
+        if mode=="Group":return qq in _l(n.get("group_name",""))
         if mode=="Category":return qq in _l(n.get("category",""))
         if mode=="Subcategory":return qq in _l(n.get("sub",""))
         if mode=="Tag":
@@ -324,7 +384,7 @@ class Table_Style(QWidget):
             if qq in tags:return True
             return qq in self._tok(tags)
         if mode=="Command":return qq in _l(n.get("command","")) or qq in _l(n.get("title",""))
-        blob=" ".join([n.get("title",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")])
+        blob=" ".join([n.get("title",""),n.get("group_name",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")])
         return qq in _l(blob)
     def _apply(self):
         q=self._q;mode=self._mode
@@ -358,6 +418,12 @@ class Table_Style(QWidget):
         a3=QAction("Copy Title",self);a3.triggered.connect(lambda:(QApplication.clipboard().setText(n.get("title","") or ""),_log("[+]",f"Copied title: {n.get('title','')}")))
         a4=QAction("Copy Category/Sub",self);a4.triggered.connect(lambda:(QApplication.clipboard().setText(f"{n.get('category','')} > {n.get('sub','')}".strip()),_log("[+]",f"Copied path: {n.get('title','')}")))
         m.addAction(a1);m.addAction(a2);m.addSeparator();m.addAction(a3);m.addAction(a4)
+        if _norm(n.get("group_name","")):
+            a6=QAction("Copy Group",self);a6.triggered.connect(lambda:(QApplication.clipboard().setText(n.get("group_name","") or ""),_log("[+]",f"Copied group: {n.get('group_name','')}")))
+            m.addAction(a6)
+        if n.get("note_id") is not None:
+            a5=QAction("Copy Note ID",self);a5.triggered.connect(lambda:(QApplication.clipboard().setText(str(n.get("note_id"))),_log("[+]",f"Copied note id: {n.get('note_id')}")))
+            m.addAction(a5)
         m.exec(self.table.viewport().mapToGlobal(pos))
     def _render(self):
         rows=self._view
@@ -367,15 +433,16 @@ class Table_Style(QWidget):
             self.table.setRowCount(len(rows))
             for r,n in enumerate(rows):
                 cmd_disp=self._get_cmd(n) if callable(self._get_cmd) else n.get("command","")
+                preview=_row_preview(n,cmd_disp)
                 vals=[_ell(n.get("title",""),120),_ell(n.get("category",""),40),_ell(n.get("sub",""),40),_ell(n.get("tags",""),60),_ell(cmd_disp,260),"⧉"]
                 for c,val in enumerate(vals):
                     it=QTableWidgetItem(val if val is not None else "")
                     it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
-                    if c==self._c_cmd:it.setToolTip(cmd_disp or "")
+                    if c==self._c_cmd:it.setToolTip(preview or cmd_disp or "")
                     elif c==self._c_copy:it.setToolTip("Copy")
-                    else:it.setToolTip(it.text())
+                    else:it.setToolTip(preview if c==0 else it.text())
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c in (self._c_cat,self._c_sub,self._c_tags,self._c_copy) else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
-                    if c==0:it.setData(Qt.ItemDataRole.UserRole,n)
+                    if c==0:it.setText(_ell(_title_text(n),120));it.setData(Qt.ItemDataRole.UserRole,n)
                     self.table.setItem(r,c,it)
             self.table.clearSelection()
         finally:
@@ -384,7 +451,7 @@ class Split_View_Style(QWidget):
     def __init__(self,on_copy,get_cmd,parent=None):
         super().__init__(parent)
         self._notes=[];self._base=[];self._q="";self._mode="Keyword";self._on_copy=on_copy;self._get_cmd=get_cmd
-        self._src_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
+        self._src_filter="All";self._group_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
         self._auto_cols=True;self._auto_limit=200
         self._bar_cap=200
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
@@ -441,8 +508,9 @@ class Split_View_Style(QWidget):
         self._q=_norm(q)
         self._mode=mode or "Keyword"
         self._apply()
-    def set_filters(self,src,cat,sub,tag,apply=True):
+    def set_filters(self,src,group,cat,sub,tag,apply=True):
         self._src_filter=src or "All"
+        self._group_filter=group or "All"
         self._cat_filter=cat or "All"
         self._sub_filter=sub or "All"
         self._tag_filter=tag or "All"
@@ -469,6 +537,8 @@ class Split_View_Style(QWidget):
         src=_norm(self._src_filter)
         if src=="Linked" and _norm(n.get("src",""))!="Commands":return False
         if src=="Not Linked" and _norm(n.get("src",""))!="CommandsNotes":return False
+        group=_norm(self._group_filter)
+        if group!="All" and _l(n.get("group_name",""))!=_l(group):return False
         cat=_norm(self._cat_filter)
         if cat!="All" and _l(n.get("category",""))!=_l(cat):return False
         sub=_norm(self._sub_filter)
@@ -479,6 +549,7 @@ class Split_View_Style(QWidget):
             if _l(tag) not in [x.lower() for x in tags]:return False
         qq=_l(q)
         if not qq:return True
+        if mode=="Group":return qq in _l(n.get("group_name",""))
         if mode=="Category":return qq in _l(n.get("category",""))
         if mode=="Subcategory":return qq in _l(n.get("sub",""))
         if mode=="Tag":
@@ -486,7 +557,7 @@ class Split_View_Style(QWidget):
             if qq in tags:return True
             return qq in self._tok(tags)
         if mode=="Command":return qq in _l(n.get("command","")) or qq in _l(n.get("title",""))
-        blob=" ".join([n.get("title",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")])
+        blob=" ".join([n.get("title",""),n.get("group_name",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")])
         return qq in _l(blob)
     def _sel_text(self,w,default="All"):
         it=w.currentItem()
@@ -576,6 +647,12 @@ class Split_View_Style(QWidget):
         a3=QAction("Copy Title",self);a3.triggered.connect(lambda:(QApplication.clipboard().setText(n.get("title","") or ""),_log("[+]",f"Copied title: {n.get('title','')}")))
         a4=QAction("Copy Category/Sub",self);a4.triggered.connect(lambda:(QApplication.clipboard().setText(f"{n.get('category','')} > {n.get('sub','')}".strip()),_log("[+]",f"Copied path: {n.get('title','')}")))
         m.addAction(a1);m.addAction(a2);m.addSeparator();m.addAction(a3);m.addAction(a4)
+        if _norm(n.get("group_name","")):
+            a6=QAction("Copy Group",self);a6.triggered.connect(lambda:(QApplication.clipboard().setText(n.get("group_name","") or ""),_log("[+]",f"Copied group: {n.get('group_name','')}")))
+            m.addAction(a6)
+        if n.get("note_id") is not None:
+            a5=QAction("Copy Note ID",self);a5.triggered.connect(lambda:(QApplication.clipboard().setText(str(n.get("note_id"))),_log("[+]",f"Copied note id: {n.get('note_id')}")))
+            m.addAction(a5)
         m.exec(self.table.viewport().mapToGlobal(pos))
     def _render(self):
         rows=self._filtered()
@@ -585,15 +662,16 @@ class Split_View_Style(QWidget):
             self.table.setRowCount(len(rows))
             for r,n in enumerate(rows):
                 cmd_disp=self._get_cmd(n) if callable(self._get_cmd) else n.get("command","")
+                preview=_row_preview(n,cmd_disp)
                 vals=[_ell(n.get("title",""),120),_ell(n.get("tags",""),80),_ell(cmd_disp,260),"⧉"]
                 for c,val in enumerate(vals):
                     it=QTableWidgetItem(val if val is not None else "")
                     it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
-                    if c==self._c_cmd:it.setToolTip(cmd_disp or "")
+                    if c==self._c_cmd:it.setToolTip(preview or cmd_disp or "")
                     elif c==self._c_copy:it.setToolTip("Copy")
-                    else:it.setToolTip(it.text())
+                    else:it.setToolTip(preview if c==0 else it.text())
                     it.setTextAlignment(Qt.AlignmentFlag.AlignCenter if c in (self._c_tags,self._c_copy) else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
-                    if c==0:it.setData(Qt.ItemDataRole.UserRole,n)
+                    if c==0:it.setText(_ell(_title_text(n),120));it.setData(Qt.ItemDataRole.UserRole,n)
                     self.table.setItem(r,c,it)
             self.table.clearSelection()
         finally:
@@ -636,9 +714,11 @@ class Widget(QWidget):
         super().__init__(parent)
         self._db_path=None;self._db_mtime=None;self._notes=[];self._mode="Keyword";self._style="table"
         self._saved=_load_searches();self._applying_saved=False
-        self._meta_cats=[];self._meta_subs={};self._meta_tags=[]
+        self._recent=_load_recent_searches()
+        self._meta_groups=[];self._meta_cats=[];self._meta_subs={};self._meta_tags=[]
         self.ctx=LiveTargetContext()
         self.rep=CommandReplacer(self.ctx)
+        self._recent_timer=QTimer(self);self._recent_timer.setSingleShot(True);self._recent_timer.setInterval(500);self._recent_timer.timeout.connect(self._remember_recent_search)
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.frame=QFrame(self);self.frame.setObjectName("HomeFrame");root.addWidget(self.frame,1)
         v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
@@ -651,9 +731,9 @@ class Widget(QWidget):
         a2=QAction("Split View",self);a2.triggered.connect(lambda:self._set_style("split",sync=False))
         m.addAction(a1);m.addAction(a2)
         self.btn_style.setMenu(m)
-        self.search=QLineEdit(self.frame);self.search.setObjectName("HomeSearch");self.search.setPlaceholderText("Search...");self.search.textChanged.connect(self._on_search)
+        self.search=QLineEdit(self.frame);self.search.setObjectName("HomeSearch");self.search.setPlaceholderText("Search commands, groups, tags...");self.search.textChanged.connect(self._on_search)
         self.search.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed);self.search.setMinimumWidth(260)
-        self.filter=QComboBox(self.frame);self.filter.setObjectName("HomePerPage");self.filter.addItems(["Keyword","Category","Subcategory","Tag","Command"]);self.filter.currentTextChanged.connect(self._on_filter)
+        self.filter=QComboBox(self.frame);self.filter.setObjectName("HomePerPage");self.filter.addItems(["Keyword","Group","Category","Subcategory","Tag","Command"]);self.filter.currentTextChanged.connect(self._on_filter)
         self.btn_clear=QToolButton(self.frame);self.btn_clear.setObjectName("HomeAddBtn");self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_clear.setText("Clear");self.btn_clear.clicked.connect(self._clear)
         self.btn_clear.setStyleSheet("QToolButton{text-align:center} QToolButton::menu-indicator{image:none;width:0;height:0}")
         self.btn_mini=QToolButton(self.frame);self.btn_mini.setObjectName("HomeAddBtn");self.btn_mini.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_mini.setText("Mini Mode");self.btn_mini.clicked.connect(self._open_mini)
@@ -665,10 +745,14 @@ class Widget(QWidget):
         self.filt_box.addLayout(self.filt_row1);self.filt_box.addLayout(self.filt_row2)
         self.lbl_saved=QLabel("Saved",self.frame)
         self.cmb_saved=QComboBox(self.frame);self.cmb_saved.setObjectName("HomePerPage")
+        self.lbl_recent=QLabel("Recent",self.frame)
+        self.cmb_recent=QComboBox(self.frame);self.cmb_recent.setObjectName("HomePerPage")
         self.btn_save=QToolButton(self.frame);self.btn_save.setObjectName("HomeAddBtn");self.btn_save.setText("Save")
         self.btn_del=QToolButton(self.frame);self.btn_del.setObjectName("HomeAddBtn");self.btn_del.setText("Delete")
         self.lbl_src=QLabel("Source",self.frame)
         self.cmb_src=QComboBox(self.frame);self.cmb_src.setObjectName("HomePerPage");self.cmb_src.addItems(["All","Linked","Not Linked"])
+        self.lbl_group=QLabel("Group",self.frame)
+        self.cmb_group=QComboBox(self.frame);self.cmb_group.setObjectName("HomePerPage")
         self.lbl_cat=QLabel("Category",self.frame)
         self.cmb_cat=QComboBox(self.frame);self.cmb_cat.setObjectName("HomePerPage")
         self.lbl_sub=QLabel("Sub",self.frame)
@@ -678,19 +762,21 @@ class Widget(QWidget):
         self.btn_save.clicked.connect(self._save_search)
         self.btn_del.clicked.connect(self._delete_search)
         self.cmb_saved.currentIndexChanged.connect(self._on_saved_select)
+        self.cmb_recent.currentIndexChanged.connect(self._on_recent_select)
         self.cmb_src.currentTextChanged.connect(self._on_filter_change)
+        self.cmb_group.currentTextChanged.connect(self._on_filter_change)
         self.cmb_cat.currentTextChanged.connect(self._on_cat_filter)
         self.cmb_sub.currentTextChanged.connect(self._on_filter_change)
         self.cmb_tag.currentTextChanged.connect(self._on_filter_change)
         self._filters_compact=None
-        self._filters_visible=False
+        self._filters_visible=True
         self._layout_filters(False)
         v.addLayout(self.filt_box,0)
         self.stack=QStackedWidget(self.frame);self.stack.setObjectName("Stack");self.stack.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Expanding);v.addWidget(self.stack,1)
         self.table_style=Table_Style(self._copy,self._cmd_preview,self.stack)
         self.split_style=Split_View_Style(self._copy,self._cmd_preview,self.stack)
         self.stack.addWidget(self.table_style);self.stack.addWidget(self.split_style)
-        self._fit_top();self._refresh_saved_combo()
+        self._fit_top();self._refresh_saved_combo();self._refresh_recent_combo()
         self._set_style("table",sync=False)
         QTimer.singleShot(0,self.reload)
         self.t=QTimer(self);self.t.setInterval(900);self.t.timeout.connect(self._tick);self.t.start()
@@ -701,8 +787,8 @@ class Widget(QWidget):
             w=it.widget()
             if w:w.setParent(None)
     def _set_filters_visible(self,visible):
-        for w in (self.lbl_saved,self.cmb_saved,self.btn_save,self.btn_del,
-                  self.lbl_src,self.cmb_src,self.lbl_cat,self.cmb_cat,
+        for w in (self.lbl_saved,self.cmb_saved,self.lbl_recent,self.cmb_recent,self.btn_save,self.btn_del,
+                  self.lbl_src,self.cmb_src,self.lbl_group,self.cmb_group,self.lbl_cat,self.cmb_cat,
                   self.lbl_sub,self.cmb_sub,self.lbl_tag,self.cmb_tag):
             w.setVisible(bool(visible))
     def _layout_filters(self,compact):
@@ -721,11 +807,15 @@ class Widget(QWidget):
         if compact:
             self.filt_row1.addWidget(self.lbl_saved,0)
             self.filt_row1.addWidget(self.cmb_saved,1)
+            self.filt_row1.addWidget(self.lbl_recent,0)
+            self.filt_row1.addWidget(self.cmb_recent,1)
             self.filt_row1.addWidget(self.btn_save,0)
             self.filt_row1.addWidget(self.btn_del,0)
             self.filt_row1.addStretch(1)
             self.filt_row2.addWidget(self.lbl_src,0)
             self.filt_row2.addWidget(self.cmb_src,1)
+            self.filt_row2.addWidget(self.lbl_group,0)
+            self.filt_row2.addWidget(self.cmb_group,1)
             self.filt_row2.addWidget(self.lbl_cat,0)
             self.filt_row2.addWidget(self.cmb_cat,1)
             self.filt_row2.addWidget(self.lbl_sub,0)
@@ -736,11 +826,15 @@ class Widget(QWidget):
             return
         self.filt_row1.addWidget(self.lbl_saved,0)
         self.filt_row1.addWidget(self.cmb_saved,0)
+        self.filt_row1.addWidget(self.lbl_recent,0)
+        self.filt_row1.addWidget(self.cmb_recent,0)
         self.filt_row1.addWidget(self.btn_save,0)
         self.filt_row1.addWidget(self.btn_del,0)
         self.filt_row1.addSpacing(10)
         self.filt_row1.addWidget(self.lbl_src,0)
         self.filt_row1.addWidget(self.cmb_src,0)
+        self.filt_row1.addWidget(self.lbl_group,0)
+        self.filt_row1.addWidget(self.cmb_group,0)
         self.filt_row1.addWidget(self.lbl_cat,0)
         self.filt_row1.addWidget(self.cmb_cat,0)
         self.filt_row1.addWidget(self.lbl_sub,0)
@@ -750,8 +844,8 @@ class Widget(QWidget):
         self.filt_row1.addStretch(1)
     def _fit_top(self):
         h=30
-        for w in (self.btn_style,self.search,self.filter,self.btn_clear,self.btn_mini,self.cmb_saved,self.cmb_src,self.cmb_cat,self.cmb_sub,self.cmb_tag,self.btn_save,self.btn_del):w.setFixedHeight(h)
-        for w in (self.lbl_saved,self.lbl_src,self.lbl_cat,self.lbl_sub,self.lbl_tag):w.setFixedHeight(h)
+        for w in (self.btn_style,self.search,self.filter,self.btn_clear,self.btn_mini,self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag,self.btn_save,self.btn_del):w.setFixedHeight(h)
+        for w in (self.lbl_saved,self.lbl_recent,self.lbl_src,self.lbl_group,self.lbl_cat,self.lbl_sub,self.lbl_tag):w.setFixedHeight(h)
         width=self.frame.width() if self.frame.width()>0 else self.width()
         compact=width<1100
         fm_btn=QFontMetrics(self.btn_style.font())
@@ -761,11 +855,13 @@ class Widget(QWidget):
         fm_cmb=QFontMetrics(self.filter.font());self.filter.setFixedWidth(max(fm_cmb.horizontalAdvance(self.filter.itemText(i)) for i in range(self.filter.count()))+50)
         fm_clr=QFontMetrics(self.btn_clear.font());self.btn_clear.setFixedWidth(fm_clr.horizontalAdvance("Clear")+28)
         fm_mini=QFontMetrics(self.btn_mini.font());self.btn_mini.setFixedWidth(fm_mini.horizontalAdvance("Mini Mode")+28)
-        for w in (self.cmb_saved,self.cmb_src,self.cmb_cat,self.cmb_sub,self.cmb_tag):
+        for w in (self.cmb_saved,self.cmb_recent,self.cmb_src,self.cmb_group,self.cmb_cat,self.cmb_sub,self.cmb_tag):
             w.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
         self.search.setMinimumWidth(200 if compact else 260)
         self.cmb_saved.setMinimumWidth(120 if compact else 180)
+        self.cmb_recent.setMinimumWidth(150 if compact else 220)
         self.cmb_src.setMinimumWidth(90 if compact else 120)
+        self.cmb_group.setMinimumWidth(110 if compact else 150)
         self.cmb_cat.setMinimumWidth(120 if compact else 150)
         self.cmb_sub.setMinimumWidth(120 if compact else 150)
         self.cmb_tag.setMinimumWidth(90 if compact else 120)
@@ -795,11 +891,24 @@ class Widget(QWidget):
                     self.cmb_saved.setCurrentIndex(i)
                     break
         self.cmb_saved.blockSignals(False)
+    def _refresh_recent_combo(self):
+        self.cmb_recent.blockSignals(True)
+        self.cmb_recent.clear()
+        self.cmb_recent.addItem("Recent searches")
+        for s in (self._recent or []):
+            self.cmb_recent.addItem(_recent_entry_label(s))
+            self.cmb_recent.setItemData(self.cmb_recent.count()-1,s)
+        self.cmb_recent.blockSignals(False)
     def _clear_saved_selection(self):
         if self.cmb_saved.currentIndex()!=0:
             self.cmb_saved.blockSignals(True)
             self.cmb_saved.setCurrentIndex(0)
             self.cmb_saved.blockSignals(False)
+    def _clear_recent_selection(self):
+        if self.cmb_recent.currentIndex()!=0:
+            self.cmb_recent.blockSignals(True)
+            self.cmb_recent.setCurrentIndex(0)
+            self.cmb_recent.blockSignals(False)
     def _set_combo_value(self,combo,val):
         v=_norm(val) or "All"
         idx=combo.findText(v,Qt.MatchFlag.MatchFixedString)
@@ -817,12 +926,15 @@ class Widget(QWidget):
         self._set_combo_value(combo,keep)
         combo.blockSignals(False)
     def _collect_meta(self):
-        cats=set();subs={};tags=set()
+        groups=set();cats=set();subs={};tags=set()
         for n in (self._notes or []):
+            g=_norm(n.get("group_name",""))
+            if g:groups.add(g)
             c=_norm(n.get("category","")) or "Uncategorized"
             sc=_norm(n.get("sub","")) or "General"
             cats.add(c);subs.setdefault(c,set()).add(sc)
             for t in _split_tags(n.get("tags","")):tags.add(t)
+        self._meta_groups=sorted(list(groups),key=lambda x:x.lower())
         self._meta_cats=sorted(list(cats),key=lambda x:x.lower())
         self._meta_subs={k:sorted(list(v),key=lambda x:x.lower()) for k,v in subs.items()}
         self._meta_tags=sorted(list(tags),key=lambda x:x.lower())
@@ -836,21 +948,23 @@ class Widget(QWidget):
             items=self._meta_subs.get(cat,[])
         self._set_combo_items(self.cmb_sub,items,keep)
     def _refresh_filter_options(self):
+        keep_group=_norm(self.cmb_group.currentText())
         keep_cat=_norm(self.cmb_cat.currentText())
         keep_sub=_norm(self.cmb_sub.currentText())
         keep_tag=_norm(self.cmb_tag.currentText())
         self._collect_meta()
+        self._set_combo_items(self.cmb_group,self._meta_groups,keep_group)
         self._set_combo_items(self.cmb_cat,self._meta_cats,keep_cat)
         self._refresh_sub_combo(keep_sub)
         self._set_combo_items(self.cmb_tag,self._meta_tags,keep_tag)
         self._fit_top()
     def _current_filters(self):
-        return {"src":self.cmb_src.currentText(),"category":self.cmb_cat.currentText(),"sub":self.cmb_sub.currentText(),"tag":self.cmb_tag.currentText()}
+        return {"src":self.cmb_src.currentText(),"group":self.cmb_group.currentText(),"category":self.cmb_cat.currentText(),"sub":self.cmb_sub.currentText(),"tag":self.cmb_tag.currentText()}
     def _current_search_entry(self,name):
-        return {"name":_norm(name),"query":self.search.text(),"mode":self._mode,"filters":self._current_filters()}
-    def _on_saved_select(self,idx):
-        if idx<=0:return
-        data=self.cmb_saved.itemData(idx)
+        entry=_normalize_search_entry({"name":_norm(name),"query":self.search.text(),"mode":self._mode,"filters":self._current_filters(),"captured_at":datetime.now(timezone.utc).isoformat()})
+        if not _norm(name):entry.pop("name",None)
+        return entry
+    def _apply_entry(self,data,from_recent=False):
         if not isinstance(data,dict):return
         self._applying_saved=True
         try:
@@ -858,12 +972,49 @@ class Widget(QWidget):
             self.filter.setCurrentText(data.get("mode","Keyword"))
             flt=data.get("filters",{}) if isinstance(data.get("filters",{}),dict) else {}
             self._set_combo_value(self.cmb_src,flt.get("src","All"))
+            self._set_combo_value(self.cmb_group,flt.get("group","All"))
             self._set_combo_value(self.cmb_cat,flt.get("category","All"))
             self._refresh_sub_combo(flt.get("sub","All"))
             self._set_combo_value(self.cmb_tag,flt.get("tag","All"))
         finally:
             self._applying_saved=False
+        if from_recent:self._clear_saved_selection()
+        else:self._clear_recent_selection()
         self._apply_query()
+    def _on_saved_select(self,idx):
+        if idx<=0:return
+        data=self.cmb_saved.itemData(idx)
+        self._apply_entry(data,from_recent=False)
+        self._store_recent_entry(data)
+    def _on_recent_select(self,idx):
+        if idx<=0:return
+        data=self.cmb_recent.itemData(idx)
+        self._apply_entry(data,from_recent=True)
+        self._store_recent_entry(data)
+    def _has_meaningful_search(self,entry):
+        data=_normalize_search_entry(entry)
+        if _norm(data.get("query","")):return True
+        if _norm(data.get("mode","Keyword"))!="Keyword":return True
+        for v in _norm_filters(data.get("filters",{})).values():
+            if _norm(v) and _norm(v)!="All":return True
+        return False
+    def _store_recent_entry(self,entry):
+        data=_normalize_search_entry(entry);data["captured_at"]=datetime.now(timezone.utc).isoformat()
+        if not self._has_meaningful_search(data):return
+        sig=_entry_signature(data)
+        rows=[data]
+        for it in (self._recent or []):
+            if _entry_signature(it)==sig:continue
+            rows.append(_normalize_search_entry(it))
+        self._recent=rows[:20]
+        _save_recent_searches(self._recent)
+        self._refresh_recent_combo()
+    def _schedule_recent_save(self):
+        if self._applying_saved:return
+        try:self._recent_timer.start()
+        except Exception:pass
+    def _remember_recent_search(self):
+        self._store_recent_entry(self._current_search_entry(""))
     def _save_search(self):
         name,ok=QInputDialog.getText(self,"Save Search","Name")
         if not ok:return
@@ -889,13 +1040,15 @@ class Widget(QWidget):
         _save_searches(self._saved)
         self._refresh_saved_combo()
     def _on_filter_change(self,*_):
-        if not self._applying_saved:self._clear_saved_selection()
+        if not self._applying_saved:self._clear_saved_selection();self._clear_recent_selection()
         self._apply_query()
+        self._schedule_recent_save()
     def _on_cat_filter(self,*_):
         keep=_norm(self.cmb_sub.currentText())
         self._refresh_sub_combo(keep)
-        if not self._applying_saved:self._clear_saved_selection()
+        if not self._applying_saved:self._clear_saved_selection();self._clear_recent_selection()
         self._apply_query()
+        self._schedule_recent_save()
     def _cmd_preview(self,n):
         if not n:return ""
         return self.rep.apply(n.get("command",""))
@@ -924,10 +1077,10 @@ class Widget(QWidget):
         flt=self._current_filters()
         use=(style or self._style) or "table"
         if use=="split":
-            self.split_style.set_filters(flt.get("src"),flt.get("category"),flt.get("sub"),flt.get("tag"),apply=False)
+            self.split_style.set_filters(flt.get("src"),flt.get("group"),flt.get("category"),flt.get("sub"),flt.get("tag"),apply=False)
             self.split_style.set_query(q,self._mode)
         else:
-            self.table_style.set_filters(flt.get("src"),flt.get("category"),flt.get("sub"),flt.get("tag"),apply=False)
+            self.table_style.set_filters(flt.get("src"),flt.get("group"),flt.get("category"),flt.get("sub"),flt.get("tag"),apply=False)
             self.table_style.set_query(q,self._mode)
     def _copy(self,cmd,title=""):
         try:
@@ -949,20 +1102,26 @@ class Widget(QWidget):
             self.search.blockSignals(True);self.search.setText("");self.search.blockSignals(False)
             self.filter.setCurrentText("Keyword")
             self._set_combo_value(self.cmb_src,"All")
+            self._set_combo_value(self.cmb_group,"All")
             self._set_combo_value(self.cmb_cat,"All")
             self._refresh_sub_combo("All")
             self._set_combo_value(self.cmb_tag,"All")
             self._clear_saved_selection()
+            self._clear_recent_selection()
         finally:
             self._applying_saved=False
+        try:self._recent_timer.stop()
+        except Exception:pass
         self._apply_query()
     def _on_search(self,t):
-        if not self._applying_saved:self._clear_saved_selection()
+        if not self._applying_saved:self._clear_saved_selection();self._clear_recent_selection()
         self._apply_query()
+        self._schedule_recent_save()
     def _on_filter(self,t):
         self._mode=t or "Keyword"
-        if not self._applying_saved:self._clear_saved_selection()
+        if not self._applying_saved:self._clear_saved_selection();self._clear_recent_selection()
         self._apply_query()
+        self._schedule_recent_save()
     def _set_style(self,style,sync=True):
         self._style="split" if style=="split" else "table"
         label="Split View" if self._style=="split" else "Table"

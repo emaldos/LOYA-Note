@@ -17,6 +17,18 @@
       ]
     },
     {
+      "key": "update",
+      "description": "Check the official authenticated release from emaldos/LOYA-Note, show version/status, open update logs, or start the safe updater with Y/N confirmation and recovery rollback access.",
+      "examples": [
+        "update",
+        "update check",
+        "update now",
+        "update version",
+        "update logs",
+        "update rollback"
+      ]
+    },
+    {
       "key": "search",
       "description": "Search with filters (and/or/not, ~ fuzzy, date_from/date_to, has/missing, comma values). Supports limit and pipes.",
       "examples": [

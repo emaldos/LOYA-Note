@@ -1,0 +1,35 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+# Virtual environments
+.venv/
+.venv_windows/
+.venv_linux/
+venv/
+env/
+# Local app runtime data
+Data/
+Logs/
+Backups/
+Cores/Update/OldVersions/
+Cores/Update/state.json
+# Temporary files
+*.tmp
+*.bak
+*.orig
+# Test/cache/tooling
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+build/
+dist/
+# IDE / OS
+.idea/
+.vs/
+.vscode/
+Thumbs.db
+Desktop.ini
