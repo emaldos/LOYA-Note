@@ -3,8 +3,8 @@ from pathlib import Path
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QTimer,QEvent
-from PyQt6.QtGui import QAction,QFontMetrics,QTextDocument
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QComboBox,QDialog,QFileDialog,QMessageBox,QMenu,QProgressBar,QCheckBox,QApplication,QLineEdit,QInputDialog,QScrollArea,QGridLayout
+from PyQt6.QtGui import QAction,QFontMetrics,QTextDocument,QColor
+from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QComboBox,QDialog,QFileDialog,QMessageBox,QMenu,QProgressBar,QCheckBox,QApplication,QLineEdit,QInputDialog,QScrollArea,QGridLayout,QTabWidget
 from Cores.Update import GITHUB_RELEASES_API_URL as _UP_MANIFEST_URL
 from Cores.Update import OFFICIAL_SOURCE_REPO as _UP_REPO_URL
 from Cores import common_db as _common_db
@@ -646,6 +646,151 @@ ping {IP}
 See -Notename-Aleaice- for details.
 
 ---
+"""
+
+def _json_template(obj):return json.dumps(obj,ensure_ascii=False,indent=2)+"\n"
+def _human_notes_json_template():
+    return _json_template({"Notes":[{"note_name":"Example Note","group_name":"Examples","content":"<h1>Example Note</h1><p>Write note content here.</p><p><strong>Bold</strong>, <em>italic</em>, <u>underline</u>.</p><p><C [Command Note Tittle: Example Command, Category: General, Sub Category: Shell, Tags: demo, Description: example command] ></p><pre>echo hello</pre><p></C></p>","created_at":"","updated_at":""}],"CommandsNotes":[{"note_name":"Example Note","category":"General","sub_category":"Shell","command":"echo hello","tags":"demo","description":"Example command","created_at":"","updated_at":""}],"Commands":[]})
+def _human_commands_md_template():
+    return """# Commands Notes
+
+## Example Command
+- Category: General
+- Sub Category: Shell
+- Tags: demo
+- Description: Example command
+
+```bash
+echo hello
+```
+"""
+def _human_commands_json_template():
+    return _json_template({"CommandsNotes":[{"note_name":"Example Note","category":"General","sub_category":"Shell","command":"echo hello","tags":"demo","description":"Example command","created_at":"","updated_at":""}]})
+def _human_targets_json_template():
+    return _json_template([{"id":"example_target","name":"Example Target","status":"not_used","values":{"URL":"https://example.com","IP":"127.0.0.1"},"created":"","updated":""}])
+def _human_targets_csv_template():
+    return "id,name,status,created,updated,URL,IP\nexample_target,Example Target,not_used,,,https://example.com,127.0.0.1\n"
+def _human_target_values_json_template():
+    return _json_template({"URL":{"priority":0},"IP":{"priority":10}})
+def _human_target_values_csv_template():
+    return "key,priority\nURL,0\nIP,10\n"
+def _ai_notes_template():
+    return """# LOYA Notes AI Template
+
+## 1. Prompt For AI
+Rewrite the user's note into LOYA Note structured markdown.
+Return only the import content from section 2.
+Use one H1 line for the note name.
+Use an optional Group line directly after the H1.
+Keep commands inside LOYA command blocks exactly.
+Available note features: Note Name, Group, normal text, command block, bold, italic, underline, font size, text color, reference color, left or center alignment, bullet list, numbered list, and table.
+Markdown can represent bold, italic, lists, tables, headings, and links.
+For LOYA command blocks, use this exact wrapper:
+<C [Command Note Tittle: ..., Category: ..., Sub Category: ..., Tags: ..., Description: ...] >
+command text here
+</C>
+
+## 2. Exact Import Format
+```markdown
+# Example Note
+Group: Examples
+
+This is normal note text.
+
+**Bold text**
+*Italic text*
+<u>Underlined text</u>
+<span style="font-size:18px;color:#ffffff;background-color:#333333">Styled text</span>
+
+- Bullet item
+- Bullet item
+
+| Name | Value |
+| --- | --- |
+| URL | https://example.com |
+
+<C [Command Note Tittle: Example Command, Category: General, Sub Category: Shell, Tags: demo, Description: example command] >
+echo hello
+</C>
+```
+"""
+def _ai_commands_template():
+    return """# LOYA Commands AI Template
+
+## 1. Prompt For AI
+Rewrite the user's command list into LOYA Commands Notes markdown.
+Return only the import content from section 2.
+Each command must be under a level 2 heading.
+Use Category, Sub Category, Tags, and Description metadata when available.
+Put the command body inside one fenced code block.
+Do not add explanations outside the format.
+
+## 2. Exact Import Format
+````markdown
+# Commands Notes
+
+## Example Command
+- Category: General
+- Sub Category: Shell
+- Tags: demo
+- Description: Example command
+
+```bash
+echo hello
+```
+````
+"""
+def _ai_targets_template():
+    return """# LOYA Targets AI Template
+
+## 1. Prompt For AI
+Rewrite the user's targets into LOYA Targets JSON.
+Return only the JSON array from section 2.
+Each target needs name, status, and values.
+Status must be not_used or live.
+Use values for target elements such as URL, IP, HOST, PORT, USERNAME, or any custom element name.
+Keep JSON valid with double quotes.
+
+## 2. Exact Import Format
+```json
+[
+  {
+    "id": "example_target",
+    "name": "Example Target",
+    "status": "not_used",
+    "values": {
+      "URL": "https://example.com",
+      "IP": "127.0.0.1"
+    },
+    "created": "",
+    "updated": ""
+  }
+]
+```
+"""
+def _ai_target_values_template():
+    return """# LOYA Target Values AI Template
+
+## 1. Prompt For AI
+Rewrite the user's target element names into LOYA Target Values JSON.
+Return only the JSON object from section 2.
+Each key is an element name.
+Priority is a number from 0 to 65535.
+Use manual true only when the value should stay manually controlled.
+Keep JSON valid with double quotes.
+
+## 2. Exact Import Format
+```json
+{
+  "URL": {
+    "priority": 0
+  },
+  "IP": {
+    "priority": 10,
+    "manual": true
+  }
+}
+```
 """
 
 def _parse_commands_notes_markdown(md_text):
@@ -1318,11 +1463,52 @@ class Targets:
         arr=[x for x in (data or []) if isinstance(x,(dict,list,str,int,float,bool)) or x is None]
         return _write_json(self.path,arr)
     def export_json(self,out_path,data):_write_json(out_path,data if isinstance(data,list) else [data] if isinstance(data,dict) else [])
+    def export_csv(self,out_path,data):
+        arr=data if isinstance(data,list) else [data] if isinstance(data,dict) else []
+        keys=[]
+        for it in arr:
+            vals=it.get("values",{}) if isinstance(it,dict) and isinstance(it.get("values",{}),dict) else {}
+            for k in vals.keys():
+                kk=_norm(k)
+                if kk and kk not in keys:keys.append(kk)
+        fields=["id","name","status","created","updated"]+keys
+        with open(out_path,"w",encoding="utf-8",newline="") as f:
+            w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
+            for it in arr:
+                if not isinstance(it,dict):continue
+                vals=it.get("values",{}) if isinstance(it.get("values",{}),dict) else {}
+                row={k:_norm(it.get(k,"")) for k in ["id","name","status","created","updated"]}
+                for k in keys:row[k]=_norm(vals.get(k,""))
+                w.writerow(row)
     def parse_json(self,path):
         d=_read_json(path,[])
         if isinstance(d,list):return d
         if isinstance(d,dict):return [d]
         return []
+    def parse_csv(self,path):
+        out=[];base={"id","name","target","target_name","status","created","updated","values","values_json"}
+        with open(path,"r",encoding="utf-8",newline="") as f:
+            rd=csv.DictReader(f)
+            for r in rd:
+                if not isinstance(r,dict):continue
+                vals={}
+                raw=_norm(r.get("values_json",r.get("values","")))
+                if raw:
+                    try:
+                        parsed=json.loads(raw)
+                        if isinstance(parsed,dict):vals.update({str(k):"" if v is None else str(v) for k,v in parsed.items()})
+                    except Exception:pass
+                for k,v in r.items():
+                    kk=_norm(k)
+                    if not kk or _l(kk) in base:continue
+                    vv=_norm(v)
+                    if vv:vals[kk]=vv
+                name=_norm(r.get("name",r.get("target_name",r.get("target",""))))
+                if not name and not vals:continue
+                st=_l(r.get("status","not_used")).replace(" ","_").replace("-","_")
+                item={"id":_norm(r.get("id","")),"name":name,"status":"live" if st in ("live","used") else "not_used","values":vals,"created":_norm(r.get("created","")),"updated":_norm(r.get("updated",""))}
+                out.append(item)
+        return out
     def _key(self,item):
         if isinstance(item,dict):
             if _norm(item.get("id","")):return "id:"+_l(item.get("id",""))
@@ -1934,15 +2120,17 @@ class _BackupPage(QWidget):
         self.table.setSortingEnabled(False)
         self.table.setAlternatingRowColors(False)
         self.table.setShowGrid(True)
-        self.table.cellDoubleClicked.connect(lambda r,c:self._restore_selected())
+        self.table.cellClicked.connect(self._on_cell_click)
+        self.table.cellDoubleClicked.connect(self._on_cell_double)
         self.table.itemSelectionChanged.connect(self._on_sel)
         h=self.table.horizontalHeader()
         h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         h.setStretchLastSection(False)
         h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
+        fm=self.table.fontMetrics();self.table.setColumnWidth(2,max(88,fm.horizontalAdvance("000.0 MB")+26));self.table.setColumnWidth(3,max(72,fm.horizontalAdvance("Action")+28))
         v.addWidget(self.table,1)
         self.status=QLabel("",box);self.status.setObjectName("PageSubTitle")
         v.addWidget(self.status,0)
@@ -1976,11 +2164,10 @@ class _BackupPage(QWidget):
             h.setStretchLastSection(False)
             h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
             h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
-            h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
+            h.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed)
             h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
             self.table.resizeColumnToContents(1)
-            self.table.resizeColumnToContents(2)
-            self.table.setColumnWidth(3,56)
+            fm=self.table.fontMetrics();self.table.setColumnWidth(2,max(88,fm.horizontalAdvance("000.0 MB")+26));self.table.setColumnWidth(3,max(72,fm.horizontalAdvance("Action")+28))
         except Exception:pass
     def _set_status(self,s):self.status.setText(_norm(s))
     def _load_auto_settings(self):
@@ -2018,10 +2205,8 @@ class _BackupPage(QWidget):
             name=QTableWidgetItem(os.path.basename(p));name.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft);name.setData(Qt.ItemDataRole.UserRole,p);name.setToolTip(p)
             mod=QTableWidgetItem(datetime.fromtimestamp(mt).strftime("%Y-%m-%d %H:%M:%S"));mod.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             size=QTableWidgetItem(_fmt_size(sz));size.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
-            x=QToolButton(self.table);x.setText("X");x.setCursor(Qt.CursorShape.PointingHandCursor);x.setFixedSize(34,30)
-            x.setStyleSheet("QToolButton{background:#2a1b1b;border:1px solid #4a2b2b;color:#ff5a5a;border-radius:10px;padding:0}QToolButton:hover{background:#3a1f1f}")
-            x.clicked.connect(lambda _,pp=p:self._delete_one(pp))
-            self.table.setItem(r,0,name);self.table.setItem(r,1,mod);self.table.setItem(r,2,size);self.table.setCellWidget(r,3,x)
+            x=QTableWidgetItem("X");x.setTextAlignment(Qt.AlignmentFlag.AlignCenter);x.setForeground(QColor("#ff5a5a"));xf=x.font();xf.setBold(True);xf.setWeight(900);x.setFont(xf);x.setToolTip("Delete")
+            self.table.setItem(r,0,name);self.table.setItem(r,1,mod);self.table.setItem(r,2,size);self.table.setItem(r,3,x)
             self.table.setRowHeight(r,44)
         self.table.clearSelection()
         self._on_sel()
@@ -2036,6 +2221,18 @@ class _BackupPage(QWidget):
             p=it.data(Qt.ItemDataRole.UserRole)
             if isinstance(p,str) and p not in out:out.append(p)
         return out
+    def _row_path(self,row):
+        it=self.table.item(row,0)
+        if not it:return ""
+        p=it.data(Qt.ItemDataRole.UserRole)
+        return p if isinstance(p,str) else ""
+    def _on_cell_click(self,row,col):
+        if col!=3:return
+        p=self._row_path(row)
+        if p:self._delete_one(p)
+    def _on_cell_double(self,row,col):
+        if col==3:return
+        self._restore_selected()
     def _choose_restore_mode(self,backup_name):
         w=self.window() if self.window() else self
         mb=QMessageBox(w);mb.setWindowTitle("Restore Backup");mb.setText(f"Restore from:\n{backup_name}\nChoose mode:")
@@ -2115,7 +2312,7 @@ class _UpdatePage(QWidget):
         self.chk_auto=QCheckBox("Enable update checks",box)
         self.cmb_freq=QComboBox(box);self.cmb_freq.setObjectName("HomePerPage")
         self.cmb_channel=QComboBox(box);self.cmb_channel.setObjectName("HomePerPage")
-        self._freq_items=[("Every 6 hours",6),("Every 12 hours",12),("Daily",24),("Every 3 days",72),("Weekly",168)]
+        self._freq_items=[("Daily",24),("Every 3 days",72),("Weekly",168)]
         self.cmb_freq.addItems([x[0] for x in self._freq_items])
         self.cmb_channel.addItems(["stable"])
         row.addWidget(self.chk_auto,0);row.addWidget(QLabel("Frequency",box),0);row.addWidget(self.cmb_freq,0);row.addWidget(QLabel("Channel",box),0);row.addWidget(self.cmb_channel,0);row.addStretch(1)
@@ -2336,7 +2533,7 @@ class _RecycleBinPage(QWidget):
         top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
         t=QLabel("Recycle Bin",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
         box=QFrame(self);box.setObjectName("ContentFrame")
-        v=QVBoxLayout(box);v.setContentsMargins(8,6,8,8);v.setSpacing(4)
+        v=QVBoxLayout(box);v.setContentsMargins(10,8,10,10);v.setSpacing(6)
         self.info=QLabel("Deleted notes, commands, and targets stay here for 30 days before they are purged automatically.",box);self.info.setObjectName("PageSubTitle");self.info.setWordWrap(True)
         v.addWidget(self.info,0)
         row1=QHBoxLayout();row1.setSpacing(4)
@@ -2363,11 +2560,13 @@ class _RecycleBinPage(QWidget):
         h=self.table.horizontalHeader()
         h.setDefaultAlignment(Qt.AlignmentFlag.AlignCenter)
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0,QHeaderView.ResizeMode.ResizeToContents)
+        h.setMinimumSectionSize(96)
+        h.setSectionResizeMode(0,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(1,QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(2,QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(3,QHeaderView.ResizeMode.ResizeToContents)
-        h.setSectionResizeMode(4,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
+        h.setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed)
+        self.table.setColumnWidth(0,120);self.table.setColumnWidth(2,150);self.table.setColumnWidth(3,180);self.table.setColumnWidth(4,180)
         v.addWidget(self.table,1)
         self.status=QLabel("",box);self.status.setObjectName("PageSubTitle");self.status.setWordWrap(True)
         v.addWidget(self.status,0)
@@ -2403,6 +2602,7 @@ class _RecycleBinPage(QWidget):
     def _set_item(self,row,col,text,data=None,align=None,bold=False):
         it=QTableWidgetItem(text)
         it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
+        it.setToolTip(_norm(text))
         if align is not None:it.setTextAlignment(align)
         if bold:
             f=it.font();f.setBold(True);f.setWeight(800);it.setFont(f)
@@ -2430,7 +2630,7 @@ class _RecycleBinPage(QWidget):
             self._set_item(r,2,_norm(it.get("source","")) or "-",None,Qt.AlignmentFlag.AlignCenter,False)
             self._set_item(r,3,self._fmt_when(it.get("deleted_at","")),None,Qt.AlignmentFlag.AlignCenter,False)
             self._set_item(r,4,self._fmt_when(it.get("expires_at","")),None,Qt.AlignmentFlag.AlignCenter,False)
-            self.table.setRowHeight(r,40)
+            self.table.setRowHeight(r,46)
         self.table.clearSelection()
         self._sync_actions()
     def _restore_selected(self):
@@ -2469,210 +2669,6 @@ class _RecycleBinPage(QWidget):
         if fails:msg+=f" | Failed: {len(fails)}"
         self._set_status(msg)
         if fails:QMessageBox.warning(self,"Delete Issues","\n".join(fails[:8]))
-class _DiagnosticsPage(QWidget):
-    def __init__(self,parent=None):
-        super().__init__(parent)
-        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
-        top=QHBoxLayout();top.setContentsMargins(8,8,8,0);top.setSpacing(4)
-        t=QLabel("Diagnostics",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
-        self.box=QFrame(self);self.box.setObjectName("ContentFrame")
-        v=QVBoxLayout(self.box);v.setContentsMargins(8,6,8,8);v.setSpacing(6)
-        self.info=QLabel("Inspect local version, database, files, backups, recycle-bin state, and updater health from one page.",self.box);self.info.setObjectName("PageSubTitle");self.info.setWordWrap(True)
-        v.addWidget(self.info,0)
-        act=QHBoxLayout();act.setSpacing(4)
-        self.btn_refresh=QToolButton(self.box);self.btn_refresh.setObjectName("TargetAddBtn");self.btn_refresh.setText("Refresh");self.btn_refresh.setCursor(Qt.CursorShape.PointingHandCursor)
-        act.addWidget(self.btn_refresh,0);act.addStretch(1);v.addLayout(act)
-        logs=QGridLayout();logs.setContentsMargins(0,0,0,0);logs.setHorizontalSpacing(8);logs.setVerticalSpacing(4)
-        self.btn_logs_dir=QToolButton(self.box);self.btn_logs_dir.setObjectName("TargetMiniBtn");self.btn_logs_dir.setText("Logs Folder")
-        self.btn_log_note=QToolButton(self.box);self.btn_log_note.setObjectName("TargetMiniBtn");self.btn_log_note.setText("Note Log")
-        self.btn_log_settings=QToolButton(self.box);self.btn_log_settings.setObjectName("TargetMiniBtn");self.btn_log_settings.setText("Settings Log")
-        self.btn_log_target=QToolButton(self.box);self.btn_log_target.setObjectName("TargetMiniBtn");self.btn_log_target.setText("Target Log")
-        self.btn_log_update=QToolButton(self.box);self.btn_log_update.setObjectName("TargetMiniBtn");self.btn_log_update.setText("Update Log")
-        self.btn_log_downgrade=QToolButton(self.box);self.btn_log_downgrade.setObjectName("TargetMiniBtn");self.btn_log_downgrade.setText("Downgrade Log")
-        btns=(self.btn_logs_dir,self.btn_log_note,self.btn_log_settings,self.btn_log_target,self.btn_log_update,self.btn_log_downgrade)
-        for i,b in enumerate(btns):b.setCursor(Qt.CursorShape.PointingHandCursor);logs.addWidget(b,i//3,i%3)
-        v.addLayout(logs)
-        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(10);grid.setVerticalSpacing(4);grid.setColumnStretch(1,1)
-        self.val_version=self._mk_value(self.box);self.val_repo=self._mk_value(self.box);self.val_db=self._mk_value(self.box);self.val_schema=self._mk_value(self.box);self.val_settings=self._mk_value(self.box);self.val_targets=self._mk_value(self.box);self.val_backups=self._mk_value(self.box);self.val_recycle=self._mk_value(self.box);self.val_update=self._mk_value(self.box);self.val_recovery=self._mk_value(self.box)
-        grid.addWidget(QLabel("Current Version",self.box),0,0);grid.addWidget(self.val_version,0,1)
-        grid.addWidget(QLabel("Authenticated Source Repo",self.box),1,0);grid.addWidget(self.val_repo,1,1)
-        grid.addWidget(QLabel("Database Path and Status",self.box),2,0);grid.addWidget(self.val_db,2,1)
-        grid.addWidget(QLabel("Schema Version",self.box),3,0);grid.addWidget(self.val_schema,3,1)
-        grid.addWidget(QLabel("Settings File Status",self.box),4,0);grid.addWidget(self.val_settings,4,1)
-        grid.addWidget(QLabel("Target File Status",self.box),5,0);grid.addWidget(self.val_targets,5,1)
-        grid.addWidget(QLabel("Backup Status",self.box),6,0);grid.addWidget(self.val_backups,6,1)
-        grid.addWidget(QLabel("Recycle Bin Status",self.box),7,0);grid.addWidget(self.val_recycle,7,1)
-        grid.addWidget(QLabel("Last Update Status",self.box),8,0);grid.addWidget(self.val_update,8,1)
-        grid.addWidget(QLabel("Last Downgrade/Recovery Status",self.box),9,0);grid.addWidget(self.val_recovery,9,1)
-        v.addLayout(grid)
-        self.footer=QLabel("",self.box);self.footer.setObjectName("PageSubTitle");self.footer.setWordWrap(True)
-        v.addWidget(self.footer,0)
-        self.footer.hide()
-        root.addWidget(self.box,0)
-        root.addStretch(1)
-        self.btn_refresh.clicked.connect(self._load)
-        self.btn_logs_dir.clicked.connect(lambda:self._open_folder(_health_check.logs_dir(),"Opened logs folder."))
-        self.btn_log_note.clicked.connect(lambda:self._open_log("Note_log.log","Opened note log."))
-        self.btn_log_settings.clicked.connect(lambda:self._open_log("Settings_log.log","Opened settings log."))
-        self.btn_log_target.clicked.connect(lambda:self._open_log("Target_log.log","Opened target log."))
-        self.btn_log_update.clicked.connect(lambda:self._open_log("Update_log.log","Opened update log."))
-        self.btn_log_downgrade.clicked.connect(lambda:self._open_log("Downgrade_log.log","Opened downgrade log."))
-        QTimer.singleShot(0,self._load)
-    def _set_footer(self,msg):
-        text=_norm(msg)
-        self.footer.setText(text)
-        self.footer.setVisible(bool(text))
-    def _mk_value(self,parent):
-        w=QLabel("-",parent);w.setObjectName("PageSubTitle");w.setWordWrap(True);w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);return w
-    def _fmt_iso(self,text):
-        s=_norm(text)
-        if not s:return "-"
-        try:return datetime.fromisoformat(s.replace("Z","+00:00")).strftime("%Y-%m-%d %H:%M:%S")
-        except Exception:return s
-    def _open_folder(self,path,ok_msg):
-        try:os.makedirs(path,exist_ok=True)
-        except Exception:pass
-        ok,err=_open_path_ui(path)
-        self._set_footer(ok_msg if ok else f"Open failed: {err}")
-    def _open_log(self,name,ok_msg):
-        path=os.path.join(_health_check.logs_dir(),name)
-        try:
-            os.makedirs(os.path.dirname(path),exist_ok=True)
-            if not os.path.isfile(path):
-                with open(path,"a",encoding="utf-8"):pass
-        except Exception:pass
-        ok,err=_open_path_ui(path)
-        self._set_footer(ok_msg if ok else f"Open failed: {err}")
-    def _file_status(self,path,label,json_expected=False):
-        p=_norm(path)
-        if not p:return f"{label}: path not set."
-        name=os.path.basename(p) or p
-        if not os.path.isfile(p):return f"{label}: missing | {name}"
-        size=_fmt_size(os.path.getsize(p));mtime=_fmt_mtime(os.path.getmtime(p));status="OK"
-        if json_expected:
-            try:
-                with open(p,"r",encoding="utf-8") as f:json.load(f)
-                status="OK JSON"
-            except Exception as e:
-                err=_norm(e)
-                if len(err)>120:err=err[:117]+"..."
-                status=f"Invalid JSON ({err})"
-        return f"{label}: {status} | {size} | updated {mtime} | {name}"
-    def _db_info(self):
-        p=_db_path();out={"path":p,"ok":False,"schema":0,"summary":f"Database path not set."}
-        if not p:return out
-        if not os.path.isfile(p):
-            out["summary"]=f"Missing database file | {os.path.basename(p) or p}"
-            return out
-        size=_fmt_size(os.path.getsize(p));mtime=_fmt_mtime(os.path.getmtime(p));name=os.path.basename(p) or p
-        con=None
-        try:
-            con=sqlite3.connect(p)
-            cur=con.cursor()
-            cur.execute("PRAGMA user_version")
-            row=cur.fetchone();schema=_to_int((row[0] if row else 0),0)
-            counts={};fails=[]
-            for name in ("Notes","CommandsNotes","Commands","RecycleBin"):
-                try:
-                    cur.execute(f"SELECT COUNT(*) FROM {name}")
-                    crow=cur.fetchone();counts[name]=_to_int((crow[0] if crow else 0),0)
-                except Exception:
-                    counts[name]="?";fails.append(name)
-            out["ok"]=True;out["schema"]=schema
-            out["summary"]=f"OK | {name} | {size} | updated {mtime} | Notes {counts.get('Notes',0)} | CommandsNotes {counts.get('CommandsNotes',0)} | Commands {counts.get('Commands',0)} | RecycleBin {counts.get('RecycleBin',0)}"
-            if fails:out["summary"]+=f" | Count unavailable: {', '.join(fails)}"
-            return out
-        except Exception as e:
-            err=_norm(e)
-            if len(err)>140:err=err[:137]+"..."
-            out["summary"]=f"Open failed ({err}) | {name} | {size} | updated {mtime}"
-            return out
-        finally:
-            try:
-                if con is not None:con.close()
-            except Exception:pass
-    def _schema_text(self,schema,db_ok):
-        if not db_ok:return f"Unavailable | expected {DB_SCHEMA_VERSION}"
-        if int(schema)==int(DB_SCHEMA_VERSION):return f"{schema} | matches expected {DB_SCHEMA_VERSION}"
-        if int(schema)<int(DB_SCHEMA_VERSION):return f"{schema} | expected {DB_SCHEMA_VERSION} | older schema detected"
-        return f"{schema} | expected {DB_SCHEMA_VERSION} | newer than this build"
-    def _backups_text(self):
-        bdir=_backups_dir();sdir=_old_versions_dir()
-        try:data_rows=sorted([str(x) for x in Path(bdir).glob("*.zip") if x.is_file()],key=lambda x:os.path.getmtime(x),reverse=True)
-        except Exception:data_rows=[]
-        snap_rows=_list_code_snapshots()
-        data_txt=f"Data backups: {len(data_rows)}"
-        if data_rows:data_txt+=f" | latest {os.path.basename(data_rows[0])} | {_fmt_mtime(os.path.getmtime(data_rows[0]))}"
-        else:data_txt+=" | none yet"
-        snap_txt=f"Code snapshots: {len(snap_rows)}"
-        if snap_rows:snap_txt+=f" | latest {os.path.basename(snap_rows[0][0])} | {_fmt_mtime(snap_rows[0][1])}"
-        else:snap_txt+=" | none yet"
-        return data_txt+"\n"+snap_txt
-    def _recycle_text(self):
-        try:rows=_recycle_bin.list_entries()
-        except Exception as e:return "Recycle Bin unavailable: "+_norm(e)
-        counts={_recycle_bin.TYPE_NOTE:0,_recycle_bin.TYPE_COMMAND:0,_recycle_bin.TYPE_TARGET:0}
-        for row in rows:
-            typ=_norm(row.get("entity_type",""))
-            if typ in counts:counts[typ]+=1
-        return f"{len(rows)} item(s) | Notes {counts.get(_recycle_bin.TYPE_NOTE,0)} | Commands {counts.get(_recycle_bin.TYPE_COMMAND,0)} | Targets {counts.get(_recycle_bin.TYPE_TARGET,0)} | retention {_recycle_bin.RETENTION_DAYS} days"
-    def _update_status_text(self,state):
-        st=state if isinstance(state,dict) else {}
-        cur=_norm(st.get("current_version",""));latest=_norm(st.get("last_available_version",""));pending=_norm(st.get("pending_version",""));err=_norm(st.get("last_error",""))
-        if err:base="Error: "+err
-        elif st.get("update_in_progress"):
-            if pending and cur and pending==cur:base=f"Installed update {pending}. Waiting for first successful launch confirmation."
-            else:base=f"Update in progress to {pending or latest or '?'}."
-        elif pending:base=f"Pending update detected for {pending}."
-        elif cur and latest:
-            try:
-                cmpv=_compare_update_versions(latest,cur)
-                if cmpv>0:base=f"New version available: {latest}."
-                elif cmpv==0:base="You are on the latest version."
-                else:base=f"Current version {cur} is newer than recorded release {latest}."
-            except Exception:base=f"Latest authenticated release: {latest}."
-        elif latest:base=f"Latest authenticated release: {latest}."
-        else:base="Not checked yet."
-        parts=[base]
-        if st.get("last_checked"):parts.append("Last checked "+self._fmt_iso(st.get("last_checked","")))
-        if st.get("last_good_version"):parts.append("Last good "+_norm(st.get("last_good_version","")))
-        up_log=os.path.join(_health_check.logs_dir(),"Update_log.log")
-        if os.path.isfile(up_log):parts.append("Update log "+_fmt_mtime(os.path.getmtime(up_log)))
-        return " | ".join([p for p in parts if _norm(p)])
-    def _recovery_text(self,state):
-        st=state if isinstance(state,dict) else {}
-        parts=[]
-        if st.get("last_launch_ok"):parts.append("Last launch OK")
-        else:parts.append("Last launch issue detected")
-        if st.get("last_launch_started_at"):parts.append("Started "+self._fmt_iso(st.get("last_launch_started_at","")))
-        if st.get("last_launch_completed_at"):parts.append("Completed "+self._fmt_iso(st.get("last_launch_completed_at","")))
-        if st.get("last_launch_error"):parts.append("Error: "+_norm(st.get("last_launch_error","")))
-        dlog=os.path.join(_health_check.logs_dir(),"Downgrade_log.log")
-        if os.path.isfile(dlog):parts.append("Downgrade log "+_fmt_mtime(os.path.getmtime(dlog)))
-        else:parts.append("No downgrade or recovery log yet.")
-        return " | ".join([p for p in parts if _norm(p)])
-    def _load(self,*_):
-        ident=_get_app_identity();state=_get_update_state();db=self._db_info()
-        self.val_version.setText(_norm(ident.get("display_version","")) or _norm(ident.get("version","")) or "-")
-        repo=(_norm(state.get("source_repo","")) or _UP_REPO_URL)
-        inst_tag=_norm(state.get("source_tag",""))
-        latest_tag=_norm(state.get("last_available_tag",""))
-        if inst_tag:repo+=f" | installed tag {inst_tag}"
-        if latest_tag and latest_tag!=inst_tag:repo+=f" | latest tag {latest_tag}"
-        repo_text=_short_mid(repo,84);db_text=db.get("summary","-")
-        settings_text=self._file_status(_settings_path(),"settings.json",True)
-        targets_text=self._file_status(_targets_path(),"Targets.json",True)+"\n"+self._file_status(_targets_values_path(),"target_values.json",True)
-        backups_text=self._backups_text();update_text=self._update_status_text(state);recovery_text=self._recovery_text(state)
-        self.val_repo.setText(repo_text);self.val_repo.setToolTip(repo)
-        self.val_db.setText(_short_mid(db_text,140));self.val_db.setToolTip(db_text)
-        self.val_schema.setText(self._schema_text(db.get("schema",0),db.get("ok",False)))
-        self.val_settings.setText(_short_mid(settings_text,110));self.val_settings.setToolTip(settings_text)
-        self.val_targets.setText(_short_mid(targets_text,140));self.val_targets.setToolTip(targets_text)
-        self.val_backups.setText(_short_mid(backups_text,140));self.val_backups.setToolTip(backups_text)
-        self.val_recycle.setText(self._recycle_text())
-        self.val_update.setText(_short_mid(update_text,140));self.val_update.setToolTip(update_text)
-        self.val_recovery.setText(_short_mid(recovery_text,120));self.val_recovery.setToolTip(recovery_text)
-        self._set_footer("")
 class _ImportExportPage(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -2681,131 +2677,184 @@ class _ImportExportPage(QWidget):
         self.ncn_exp=NCN_Export(self.db)
         self.tv=TargetValues()
         self.tg=Targets()
+        self._status_labels={}
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(10)
         top=QHBoxLayout();top.setContentsMargins(14,14,14,0);top.setSpacing(10)
-        t=QLabel("Import & Export",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
-        box=QFrame(self);box.setObjectName("ContentFrame")
-        v=QVBoxLayout(box);v.setContentsMargins(14,14,14,14);v.setSpacing(8)
-        r1=QHBoxLayout();r1.setSpacing(8)
-        lbl1=QLabel("Notes & Commands Notes",box);lbl1.setObjectName("PageSubTitle")
-        self.btn_ncn_imp=QToolButton(box);self.btn_ncn_imp.setObjectName("TargetAddBtn");self.btn_ncn_imp.setText("Import");self.btn_ncn_imp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.btn_ncn_exp=QToolButton(box);self.btn_ncn_exp.setObjectName("TargetMiniBtn");self.btn_ncn_exp.setText("Export");self.btn_ncn_exp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        mi=QMenu(self.btn_ncn_imp)
-        a=QAction("From Database (.db)",self);a.triggered.connect(lambda:self._ncn_import("db"));mi.addAction(a)
-        a=QAction("From JSON (.json)",self);a.triggered.connect(lambda:self._ncn_import("json"));mi.addAction(a)
-        a=QAction("From CSV (.zip/.csv)",self);a.triggered.connect(lambda:self._ncn_import("csv"));mi.addAction(a)
-        a=QAction("From Markdown (.md)",self);a.triggered.connect(lambda:self._ncn_import("md"));mi.addAction(a)
-        me=QMenu(self.btn_ncn_exp)
-        a=QAction("To Database (.db)",self);a.triggered.connect(lambda:self._ncn_export("db"));me.addAction(a)
-        a=QAction("To JSON (.json)",self);a.triggered.connect(lambda:self._ncn_export("json"));me.addAction(a)
-        a=QAction("To CSV (.zip)",self);a.triggered.connect(lambda:self._ncn_export("csv"));me.addAction(a)
-        a=QAction("To Markdown (.zip)",self);a.triggered.connect(lambda:self._ncn_export("md"));me.addAction(a)
-        self.btn_ncn_imp.setMenu(mi);self.btn_ncn_exp.setMenu(me)
-        r1.addWidget(lbl1,1);r1.addWidget(self.btn_ncn_imp,0);r1.addWidget(self.btn_ncn_exp,0)
-        self.ncn_status=QLabel("",box);self.ncn_status.setObjectName("PageSubTitle")
-        r1b=QHBoxLayout();r1b.setSpacing(8)
-        lbl1b=QLabel("Notes Exporting",box);lbl1b.setObjectName("PageSubTitle")
-        self.btn_note_exp=QToolButton(box);self.btn_note_exp.setObjectName("TargetMiniBtn");self.btn_note_exp.setText("Export");self.btn_note_exp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        me=QMenu(self.btn_note_exp)
-        a=QAction("To Markdown (.md)",self);a.triggered.connect(lambda:self._notes_export("md"));me.addAction(a)
-        a=QAction("To Human Markdown (.md)",self);a.triggered.connect(lambda:self._notes_export("md_human"));me.addAction(a)
-        a=QAction("To HTML (.html)",self);a.triggered.connect(lambda:self._notes_export("html"));me.addAction(a)
-        a=QAction("Export Template (.md)",self);a.triggered.connect(self._export_template);me.addAction(a)
-        self.btn_note_exp.setMenu(me)
-        r1b.addWidget(lbl1b,1);r1b.addWidget(self.btn_note_exp,0)
-        self.note_status=QLabel("",box);self.note_status.setObjectName("PageSubTitle")
-        r1c=QHBoxLayout();r1c.setSpacing(8)
-        lbl1c=QLabel("Note Templete",box);lbl1c.setObjectName("PageSubTitle")
-        self.btn_tpl_exp=QToolButton(box);self.btn_tpl_exp.setObjectName("TargetMiniBtn");self.btn_tpl_exp.setText("Export");self.btn_tpl_exp.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_tpl_exp.clicked.connect(self._export_template)
-        r1c.addWidget(lbl1c,1);r1c.addWidget(self.btn_tpl_exp,0)
-        self.tpl_status=QLabel("",box);self.tpl_status.setObjectName("PageSubTitle")
-        r2=QHBoxLayout();r2.setSpacing(8)
-        lbl2=QLabel("Target Values",box);lbl2.setObjectName("PageSubTitle")
-        self.btn_tv_imp=QToolButton(box);self.btn_tv_imp.setObjectName("TargetAddBtn");self.btn_tv_imp.setText("Import");self.btn_tv_imp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.btn_tv_exp=QToolButton(box);self.btn_tv_exp.setObjectName("TargetMiniBtn");self.btn_tv_exp.setText("Export");self.btn_tv_exp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        mi=QMenu(self.btn_tv_imp)
-        a=QAction("From JSON (.json)",self);a.triggered.connect(lambda:self._tv_import("json"));mi.addAction(a)
-        a=QAction("From CSV (.csv)",self);a.triggered.connect(lambda:self._tv_import("csv"));mi.addAction(a)
-        me=QMenu(self.btn_tv_exp)
-        a=QAction("To JSON (.json)",self);a.triggered.connect(lambda:self._tv_export("json"));me.addAction(a)
-        a=QAction("To CSV (.csv)",self);a.triggered.connect(lambda:self._tv_export("csv"));me.addAction(a)
-        self.btn_tv_imp.setMenu(mi);self.btn_tv_exp.setMenu(me)
-        r2.addWidget(lbl2,1);r2.addWidget(self.btn_tv_imp,0);r2.addWidget(self.btn_tv_exp,0)
-        self.tv_status=QLabel("",box);self.tv_status.setObjectName("PageSubTitle")
-        r3=QHBoxLayout();r3.setSpacing(8)
-        lbl3=QLabel("Targets",box);lbl3.setObjectName("PageSubTitle")
-        self.btn_tg_imp=QToolButton(box);self.btn_tg_imp.setObjectName("TargetAddBtn");self.btn_tg_imp.setText("Import");self.btn_tg_imp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        self.btn_tg_exp=QToolButton(box);self.btn_tg_exp.setObjectName("TargetMiniBtn");self.btn_tg_exp.setText("Export");self.btn_tg_exp.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        mi=QMenu(self.btn_tg_imp)
-        a=QAction("From JSON (.json)",self);a.triggered.connect(lambda:self._tg_import());mi.addAction(a)
-        me=QMenu(self.btn_tg_exp)
-        a=QAction("To JSON (.json)",self);a.triggered.connect(lambda:self._tg_export());me.addAction(a)
-        self.btn_tg_imp.setMenu(mi);self.btn_tg_exp.setMenu(me)
-        r3.addWidget(lbl3,1);r3.addWidget(self.btn_tg_imp,0);r3.addWidget(self.btn_tg_exp,0)
-        self.tg_status=QLabel("",box);self.tg_status.setObjectName("PageSubTitle")
-        r4=QHBoxLayout();r4.setSpacing(8)
-        lbl4=QLabel("LOYA Output",box);lbl4.setObjectName("PageSubTitle")
-        self.chk_structured=QCheckBox("Structured output (JSON)",box)
-        r4.addWidget(lbl4,1);r4.addWidget(self.chk_structured,0)
-        self.output_status=QLabel("",box);self.output_status.setObjectName("PageSubTitle")
-        v.addLayout(r1,0);v.addWidget(self.ncn_status,0)
-        v.addLayout(r1b,0);v.addWidget(self.note_status,0)
-        v.addLayout(r1c,0);v.addWidget(self.tpl_status,0)
-        v.addLayout(r2,0);v.addWidget(self.tv_status,0)
-        v.addLayout(r3,0);v.addWidget(self.tg_status,0)
-        v.addLayout(r4,0);v.addWidget(self.output_status,0)
-        v.addStretch(1)
-        root.addWidget(box,1)
-        self.chk_structured.stateChanged.connect(self._toggle_structured_output)
-        QTimer.singleShot(0,self._load_output_settings)
+        t=QLabel("Import and Export",self);t.setObjectName("PageTitle");top.addWidget(t,1);root.addLayout(top)
+        self.tabs=QTabWidget(self);self.tabs.setObjectName("TargetTabs")
+        export_box,ev=self._make_tab()
+        self.btn_all_exp=self._button(export_box,"Export","TargetAddBtn",self._export_all)
+        ev.addLayout(self._make_row(export_box,"Export All",self.btn_all_exp));ev.addWidget(self._make_status("all",export_box),0)
+        self.btn_ncn_exp=self._menu_button(export_box,"All Notes","TargetMiniBtn",[("Database (.db)",lambda:self._ncn_export("db")),("JSON (.json)",lambda:self._ncn_export("json")),("CSV ZIP (.zip)",lambda:self._ncn_export("csv")),("Markdown ZIP (.zip)",lambda:self._ncn_export("md"))])
+        self.btn_note_exp=self._menu_button(export_box,"One Note","TargetMiniBtn",[("Markdown (.md)",lambda:self._notes_export("md")),("Human Markdown (.md)",lambda:self._notes_export("md_human")),("HTML (.html)",lambda:self._notes_export("html"))])
+        ev.addLayout(self._make_row(export_box,"Export Notes",self.btn_ncn_exp,self.btn_note_exp));ev.addWidget(self._make_status("ncn",export_box),0);ev.addWidget(self._make_status("note",export_box),0)
+        self.btn_cmd_exp=self._menu_button(export_box,"Export","TargetMiniBtn",[("Markdown (.md)",lambda:self._commands_export("md")),("JSON (.json)",lambda:self._commands_export("json")),("CSV (.csv)",lambda:self._commands_export("csv"))])
+        ev.addLayout(self._make_row(export_box,"Export Commands (Notes DB)",self.btn_cmd_exp));ev.addWidget(self._make_status("cmd",export_box),0)
+        self.btn_tv_exp=self._menu_button(export_box,"Export","TargetMiniBtn",[("JSON (.json)",lambda:self._tv_export("json")),("CSV (.csv)",lambda:self._tv_export("csv"))])
+        ev.addLayout(self._make_row(export_box,"Export Target Values",self.btn_tv_exp));ev.addWidget(self._make_status("tv",export_box),0)
+        self.btn_tg_exp=self._menu_button(export_box,"Export","TargetMiniBtn",[("JSON (.json)",lambda:self._tg_export("json")),("CSV (.csv)",lambda:self._tg_export("csv"))])
+        ev.addLayout(self._make_row(export_box,"Export Targets",self.btn_tg_exp));ev.addWidget(self._make_status("tg",export_box),0)
+        ev.addStretch(1)
+        import_box,iv=self._make_tab()
+        self.btn_all_imp=self._button(import_box,"Import","TargetAddBtn",self._import_all)
+        iv.addLayout(self._make_row(import_box,"Import All",self.btn_all_imp));iv.addWidget(self._make_status("all_import",import_box),0)
+        self.btn_ncn_imp=self._menu_button(import_box,"Import","TargetAddBtn",[("Database (.db)",lambda:self._ncn_import("db")),("JSON (.json)",lambda:self._ncn_import("json")),("CSV Bundle (.zip/.csv)",lambda:self._ncn_import("csv")),("Structured Markdown (.md)",lambda:self._ncn_import("md")),("Human Markdown (.md)",lambda:self._ncn_import("md_human"))])
+        iv.addLayout(self._make_row(import_box,"Import Notes",self.btn_ncn_imp));iv.addWidget(self._make_status("ncn",import_box),0)
+        self.btn_cmd_imp=self._menu_button(import_box,"Import","TargetAddBtn",[("Markdown (.md)",lambda:self._commands_import("md")),("JSON (.json)",lambda:self._commands_import("json")),("CSV (.csv)",lambda:self._commands_import("csv"))])
+        iv.addLayout(self._make_row(import_box,"Import Commands (Notes DB)",self.btn_cmd_imp));iv.addWidget(self._make_status("cmd",import_box),0)
+        self.btn_tv_imp=self._menu_button(import_box,"Import","TargetAddBtn",[("JSON (.json)",lambda:self._tv_import("json")),("CSV (.csv)",lambda:self._tv_import("csv"))])
+        iv.addLayout(self._make_row(import_box,"Import Target Values",self.btn_tv_imp));iv.addWidget(self._make_status("tv",import_box),0)
+        self.btn_tg_imp=self._menu_button(import_box,"Import","TargetAddBtn",[("JSON (.json)",lambda:self._tg_import("json")),("CSV (.csv)",lambda:self._tg_import("csv"))])
+        iv.addLayout(self._make_row(import_box,"Import Targets",self.btn_tg_imp));iv.addWidget(self._make_status("tg",import_box),0);iv.addStretch(1)
+        tpl_box,tv=self._make_tab()
+        self.btn_tpl_h_notes=self._menu_button(tpl_box,"Export","TargetMiniBtn",[("Markdown (.md)",lambda:self._export_human_template("notes","md")),("JSON (.json)",lambda:self._export_human_template("notes","json")),("Database (.db)",lambda:self._export_human_template("notes","db"))])
+        tv.addLayout(self._make_row(tpl_box,"Notes Template",self.btn_tpl_h_notes))
+        self.btn_tpl_h_cmds=self._menu_button(tpl_box,"Export","TargetMiniBtn",[("Markdown (.md)",lambda:self._export_human_template("commands","md")),("JSON (.json)",lambda:self._export_human_template("commands","json"))])
+        tv.addLayout(self._make_row(tpl_box,"Commands Template",self.btn_tpl_h_cmds))
+        self.btn_tpl_h_tv=self._menu_button(tpl_box,"Export","TargetMiniBtn",[("JSON (.json)",lambda:self._export_human_template("target_values","json")),("CSV (.csv)",lambda:self._export_human_template("target_values","csv"))])
+        tv.addLayout(self._make_row(tpl_box,"Target Values Template",self.btn_tpl_h_tv))
+        self.btn_tpl_h_tg=self._menu_button(tpl_box,"Export","TargetMiniBtn",[("JSON (.json)",lambda:self._export_human_template("targets","json")),("CSV (.csv)",lambda:self._export_human_template("targets","csv"))])
+        tv.addLayout(self._make_row(tpl_box,"Targets Template",self.btn_tpl_h_tg))
+        self.btn_tpl_h_all=self._button(tpl_box,"Export","TargetAddBtn",lambda:self._export_template_bundle("human"))
+        tv.addLayout(self._make_row(tpl_box,"All Human Templates",self.btn_tpl_h_all));tv.addWidget(self._make_status("tpl",tpl_box),0);tv.addStretch(1)
+        ai_box,av=self._make_tab()
+        ai_note=QLabel("AI prompt templates explain LOYA Note import structure for each data type. Give one to AI with normal notes or data, then ask it to recreate the content in a LOYA-ready import format.",ai_box);ai_note.setObjectName("IEInfo");ai_note.setWordWrap(True)
+        av.addWidget(ai_note,0)
+        self.btn_tpl_ai_notes=self._button(ai_box,"Export","TargetMiniBtn",lambda:self._export_ai_template("notes"))
+        av.addLayout(self._make_row(ai_box,"Notes AI Template",self.btn_tpl_ai_notes))
+        self.btn_tpl_ai_cmds=self._button(ai_box,"Export","TargetMiniBtn",lambda:self._export_ai_template("commands"))
+        av.addLayout(self._make_row(ai_box,"Commands AI Template",self.btn_tpl_ai_cmds))
+        self.btn_tpl_ai_tv=self._button(ai_box,"Export","TargetMiniBtn",lambda:self._export_ai_template("target_values"))
+        av.addLayout(self._make_row(ai_box,"Target Values AI Template",self.btn_tpl_ai_tv))
+        self.btn_tpl_ai_tg=self._button(ai_box,"Export","TargetMiniBtn",lambda:self._export_ai_template("targets"))
+        av.addLayout(self._make_row(ai_box,"Targets AI Template",self.btn_tpl_ai_tg))
+        self.btn_tpl_ai_all=self._button(ai_box,"Export","TargetAddBtn",lambda:self._export_template_bundle("ai"))
+        av.addLayout(self._make_row(ai_box,"All AI Templates",self.btn_tpl_ai_all));av.addWidget(self._make_status("tpl",ai_box),0);av.addStretch(1)
+        self.tabs.addTab(export_box,"Export");self.tabs.addTab(import_box,"Import");self.tabs.addTab(tpl_box,"Template");self.tabs.addTab(ai_box,"AI Prompt Template")
+        root.addWidget(self.tabs,1)
+    def _make_tab(self):
+        box=QFrame(self.tabs);box.setObjectName("ContentFrame")
+        v=QVBoxLayout(box);v.setContentsMargins(12,12,12,12);v.setSpacing(5)
+        return box,v
+    def _make_row(self,parent,title,*widgets):
+        r=QHBoxLayout();r.setSpacing(0)
+        frame=QFrame(parent);frame.setObjectName("IEActionRow")
+        row=QHBoxLayout(frame);row.setContentsMargins(10,5,10,5);row.setSpacing(8)
+        lbl=QLabel(title,frame);lbl.setObjectName("IEActionTitle");lbl.setWordWrap(False)
+        meta=QLabel(self._row_meta(title),frame);meta.setObjectName("IEActionMeta");meta.setWordWrap(False)
+        row.addWidget(lbl,0)
+        row.addWidget(meta,1)
+        for w in widgets:row.addWidget(w,0)
+        r.addWidget(frame,1)
+        return r
+    def _row_meta(self,title):
+        return {"Export All":"Data ZIP","Export Notes":"DB / JSON / CSV ZIP / MD ZIP / one-note MD / HTML","Export Commands (Notes DB)":"MD / JSON / CSV","Export Target Values":"JSON / CSV","Export Targets":"JSON / CSV","Import All":"Data ZIP","Import Notes":"DB / JSON / CSV bundle / structured MD / human MD","Import Commands (Notes DB)":"MD / JSON / CSV","Import Target Values":"JSON / CSV","Import Targets":"JSON / CSV","Notes Template":"MD / JSON / DB","Commands Template":"MD / JSON","Target Values Template":"JSON / CSV","Targets Template":"JSON / CSV","All Human Templates":"ZIP bundle","Notes AI Template":"AI MD","Commands AI Template":"AI MD","Target Values AI Template":"AI MD","Targets AI Template":"AI MD","All AI Templates":"ZIP bundle"}.get(title,"")
+    def _button(self,parent,text,obj,fn=None):
+        btn=QToolButton(parent);btn.setObjectName(obj);btn.setText(text);btn.setCursor(Qt.CursorShape.PointingHandCursor);btn.setMinimumWidth(82)
+        if callable(fn):btn.clicked.connect(fn)
+        return btn
+    def _menu_button(self,parent,text,obj,actions):
+        btn=self._button(parent,text,obj);btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        menu=QMenu(btn)
+        for title,fn in actions:
+            a=QAction(title,self);a.triggered.connect(fn);menu.addAction(a)
+        btn.setMenu(menu)
+        return btn
+    def _make_status(self,key,parent):
+        lbl=QLabel("",parent);lbl.setObjectName("IEStatus");lbl.hide()
+        self._status_labels.setdefault(key,[]).append(lbl)
+        return lbl
+    def _set_ie_status(self,key,text):
+        text=_norm(text)
+        for lbl in self._status_labels.get(key,[]):
+            lbl.setText(text)
+            lbl.setVisible(bool(text))
     def _ensure_db(self):
         try:self.db.ensure();return True
         except Exception as e:
             QMessageBox.warning(self,"Database",f"Database error:\n{e}")
             return False
-    def _load_output_settings(self):
-        cfg=_get_chat_output_settings()
-        try:self.chk_structured.blockSignals(True)
-        except:pass
-        self.chk_structured.setChecked(bool(cfg.get("structured_output",False)))
-        try:self.chk_structured.blockSignals(False)
-        except:pass
-        self._set_output_status(cfg)
-    def _set_output_status(self,cfg):
-        self.output_status.setText("Structured output: On" if cfg.get("structured_output") else "Structured output: Off")
-    def _toggle_structured_output(self,_):
-        cfg={"structured_output":bool(self.chk_structured.isChecked())}
-        _save_chat_output_settings(cfg)
-        self._set_output_status(cfg)
+    def _import_all_info(self,path):
+        with zipfile.ZipFile(path,"r") as z:names=z.namelist()
+        data=[n for n in names if n.replace("\\","/").startswith("Data/") and not n.endswith("/")]
+        return len(data),"manifest.json" in names
+    def _choose_import_all_mode(self,name,count):
+        mb=QMessageBox(self);mb.setWindowTitle("Import All");mb.setText(f"Import all data from:\n{name}\n\nFiles: {count}\nChoose mode:")
+        b1=mb.addButton("Merge",QMessageBox.ButtonRole.AcceptRole)
+        b2=mb.addButton("Replace",QMessageBox.ButtonRole.DestructiveRole)
+        mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        if mb.clickedButton()==b1:return "merge"
+        if mb.clickedButton()==b2:return "replace"
+        return ""
+    def _import_all(self):
+        p,_=QFileDialog.getOpenFileName(self,"Import All",_abs(".."),"ZIP (*.zip)")
+        if not p:return
+        try:count,_=self._import_all_info(p)
+        except Exception as e:
+            self._set_ie_status("all_import",f"Invalid zip: {e}")
+            QMessageBox.warning(self,"Import All",f"Invalid zip:\n{e}")
+            return
+        if count<=0:
+            self._set_ie_status("all_import","Import failed: missing Data folder.")
+            QMessageBox.warning(self,"Import All","This zip does not contain LOYA Data files.")
+            return
+        mode=self._choose_import_all_mode(os.path.basename(p),count)
+        if not mode:
+            self._set_ie_status("all_import","Import cancelled.")
+            return
+        prog=_progress(self,"Import All","Restoring data ...");prog.show()
+        try:
+            ok,msg=_update_backup.restore_data_backup(p,mode=mode,progress=prog)
+        finally:
+            prog.close()
+        self._set_ie_status("all_import",msg)
+        if ok:
+            _log("[+]",f"Import all ok: {p} ({mode})")
+            QMessageBox.information(self,"Import All",msg)
+        else:
+            _log("[!]",f"Import all failed: {p} ({msg})")
+            QMessageBox.warning(self,"Import All",msg)
+    def _warn_human_markdown_import(self):
+        mb=QMessageBox(self);mb.setWindowTitle("Human Markdown Import");mb.setText("Human markdown does not keep LOYA command blocks.\nCommands may import as normal note text, so you may need to update them manually.\nYou can also use the Template tab for AI format guidance and ask AI to rewrite the note into LOYA structured markdown.")
+        bok=mb.addButton("Continue",QMessageBox.ButtonRole.AcceptRole)
+        mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        mb.exec()
+        return mb.clickedButton()==bok
     def _ncn_import(self,kind):
         if not self._ensure_db():return
+        human_md=(kind=="md_human")
+        if human_md:
+            if not self._warn_human_markdown_import():
+                self._set_ie_status("ncn","Import cancelled.")
+                return
+            kind="md"
         flt={"db":"Database (*.db)","json":"JSON (*.json)","csv":"CSV Bundle (*.zip);;CSV (*.csv);;ZIP (*.zip)","md":"Markdown (*.md)"}[kind]
         if kind=="md":
-            paths,_=QFileDialog.getOpenFileNames(self,"Import Notes & Commands Notes",_abs(".."),flt)
+            paths,_=QFileDialog.getOpenFileNames(self,"Import Human Markdown" if human_md else "Import Notes",_abs(".."),flt)
             if not paths:return
             try:
                 res=self.ncn_imp.run_multi_markdown(self,paths)
                 if not res:
-                    self.ncn_status.setText("Import cancelled.")
+                    self._set_ie_status("ncn","Import cancelled.")
                     return
-                self.ncn_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)} bad:{res.get('bad',0)}")
+                self._set_ie_status("ncn",f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)} bad:{res.get('bad',0)}")
                 _log("[+]",f"NCN import ok {res}")
             except Exception as e:
-                self.ncn_status.setText(f"Import failed: {e}")
+                self._set_ie_status("ncn",f"Import failed: {e}")
                 _log("[!]",f"NCN import failed ({e})")
             return
-        p,_=QFileDialog.getOpenFileName(self,"Import Notes & Commands Notes",_abs(".."),flt)
+        p,_=QFileDialog.getOpenFileName(self,"Import Notes",_abs(".."),flt)
         if not p:return
         try:
             res=self.ncn_imp.run(self,kind,p)
             if not res:
-                self.ncn_status.setText("Import cancelled.")
+                self._set_ie_status("ncn","Import cancelled.")
                 return
-            self.ncn_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)} bad:{res.get('bad',0)}")
+            self._set_ie_status("ncn",f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)} bad:{res.get('bad',0)}")
             _log("[+]",f"NCN import ok {res}")
         except Exception as e:
-            self.ncn_status.setText(f"Import failed: {e}")
+            self._set_ie_status("ncn",f"Import failed: {e}")
             _log("[!]",f"NCN import failed ({e})")
     def _ncn_export(self,kind):
         if not self._ensure_db():return
@@ -2820,20 +2869,205 @@ class _ImportExportPage(QWidget):
             p,_=QFileDialog.getSaveFileName(self,"Export CSV",os.path.join(base,f"Note_LOYA_export_{_now()}.zip"),"ZIP (*.zip)")
         if not p:return
         ok=self.ncn_exp.run(self,kind,p)
-        if ok:self.ncn_status.setText(f"Exported: {os.path.basename(p)}")
-    def _export_template(self):
+        if ok:self._set_ie_status("ncn",f"Exported: {os.path.basename(p)}")
+    def _commands_export(self,kind):
+        if not self._ensure_db():return
+        rows=self.db.read_table("CommandsNotes")
+        if not rows:
+            QMessageBox.information(self,"Commands Export","No CommandsNotes rows found.")
+            return
         base=_abs("..")
-        p,_=QFileDialog.getSaveFileName(self,"Export Template",os.path.join(base,"LOYA_Import_Template.md"),"Markdown (*.md)")
+        if kind=="md":
+            p,_=QFileDialog.getSaveFileName(self,"Export Commands",os.path.join(base,f"CommandsNotes_{_now()}.md"),"Markdown (*.md)")
+        elif kind=="json":
+            p,_=QFileDialog.getSaveFileName(self,"Export Commands",os.path.join(base,f"CommandsNotes_{_now()}.json"),"JSON (*.json)")
+        else:
+            p,_=QFileDialog.getSaveFileName(self,"Export Commands",os.path.join(base,f"CommandsNotes_{_now()}.csv"),"CSV (*.csv)")
         if not p:return
         try:
-            with open(p,"w",encoding="utf-8") as f:f.write(_import_template_markdown())
-            self.note_status.setText(f"Template saved: {os.path.basename(p)}")
-            _log("[+]",f"Template export -> {p}")
-            QMessageBox.information(self,"Template","Template exported. Open the file to see usage examples.")
+            if kind=="md":
+                with open(p,"w",encoding="utf-8") as f:f.write(_commands_notes_to_markdown(rows))
+            elif kind=="json":
+                _write_json(p,{"CommandsNotes":rows})
+            else:
+                fields=["note_name","category","sub_category","command","tags","description","created_at","updated_at"]
+                with open(p,"w",encoding="utf-8",newline="") as f:
+                    w=csv.DictWriter(f,fieldnames=fields);w.writeheader()
+                    for r in rows:w.writerow({k:_norm(r.get(k,"")) for k in fields})
+            self._set_ie_status("cmd",f"Exported: {os.path.basename(p)}")
+            _log("[+]",f"CommandsNotes export ok ({kind}) -> {p}")
         except Exception as e:
-            self.note_status.setText(f"Export failed: {e}")
+            self._set_ie_status("cmd",f"Export failed: {e}")
+            _log("[!]",f"CommandsNotes export failed ({e})")
+            QMessageBox.warning(self,"Export Commands",f"Export failed:\n{e}")
+    def _commands_incoming(self,kind,path):
+        if kind=="md":incoming=self.db.parse_incoming_markdown(path)
+        elif kind=="json":incoming=self.db.parse_incoming_json(path)
+        else:incoming=self.db.parse_incoming_csv_zip(path)
+        rows=incoming.get("CommandsNotes") if isinstance(incoming,dict) else []
+        return {"CommandsNotes":[r for r in (rows or []) if isinstance(r,dict)]}
+    def _commands_import_one(self,kind,path):
+        incoming=self._commands_incoming(kind,path)
+        if not incoming.get("CommandsNotes"):
+            return {"added":0,"replaced":0,"overwritten":0,"skipped":0,"bad":1}
+        existing=self.db.load_existing_maps()
+        plan=self.db.build_import_plan(incoming,existing)
+        return self.ncn_imp._apply_import(self,plan,incoming,"commands",os.path.basename(path))
+    def _commands_import(self,kind):
+        if not self._ensure_db():return
+        flt={"md":"Markdown (*.md)","json":"JSON (*.json)","csv":"CSV (*.csv)"}[kind]
+        if kind=="md":
+            paths,_=QFileDialog.getOpenFileNames(self,"Import Commands",_abs(".."),flt)
+            if not paths:return
+            total={"added":0,"replaced":0,"overwritten":0,"skipped":0,"bad":0}
+            for p in paths:
+                try:
+                    res=self._commands_import_one(kind,p)
+                    if not res:continue
+                    for k in total.keys():total[k]+=int(res.get(k,0) or 0)
+                except Exception as e:
+                    self._set_ie_status("cmd",f"Import failed: {e}")
+                    _log("[!]",f"CommandsNotes import failed ({e})")
+                    return
+            self._set_ie_status("cmd",f"Imported: +{total.get('added',0)} rep:{total.get('replaced',0)} ow:{total.get('overwritten',0)} skip:{total.get('skipped',0)} bad:{total.get('bad',0)}")
+            _log("[+]",f"CommandsNotes import ok {total}")
+            return
+        p,_=QFileDialog.getOpenFileName(self,"Import Commands",_abs(".."),flt)
+        if not p:return
+        try:
+            res=self._commands_import_one(kind,p)
+            if not res:
+                self._set_ie_status("cmd","Import cancelled.")
+                return
+            self._set_ie_status("cmd",f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)} bad:{res.get('bad',0)}")
+            _log("[+]",f"CommandsNotes import ok {res}")
+        except Exception as e:
+            self._set_ie_status("cmd",f"Import failed: {e}")
+            _log("[!]",f"CommandsNotes import failed ({e})")
+    def _export_all(self):
+        base=_abs("..")
+        p,_=QFileDialog.getSaveFileName(self,"Export All",os.path.join(base,f"LOYA_All_export_{_now()}.zip"),"ZIP (*.zip)")
+        if not p:return
+        prog=_progress(self,"Export All","Collecting data ...");prog.show()
+        try:
+            data_dir=_data_dir();out_abs=os.path.abspath(p);files=[]
+            if os.path.isdir(data_dir):
+                for b,_,names in os.walk(data_dir):
+                    for n in names:
+                        src=os.path.abspath(os.path.join(b,n))
+                        if src==out_abs or not os.path.isfile(src):continue
+                        rel=os.path.relpath(src,data_dir).replace("\\","/")
+                        files.append((src,f"Data/{rel}"))
+            ident=_get_app_identity()
+            meta={"type":"LOYA Note Export All","format_version":1,"created_at":datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%SZ"),"app_version":_norm(ident.get("display_version","")) or _norm(ident.get("version","")),"files":[arc for _,arc in files]}
+            os.makedirs(os.path.dirname(out_abs),exist_ok=True)
+            total=max(1,len(files))
+            with zipfile.ZipFile(out_abs,"w",compression=zipfile.ZIP_DEFLATED) as z:
+                z.writestr("manifest.json",json.dumps(meta,ensure_ascii=False,indent=2))
+                for i,(src,arc) in enumerate(files):
+                    _set_prog(prog,int(((i+1)*100)/total),f"Writing {os.path.basename(src)} ...")
+                    z.write(src,arcname=arc)
+            self._set_ie_status("all",f"Exported: {os.path.basename(out_abs)}")
+            _log("[+]",f"Export all -> {out_abs}")
+        except Exception as e:
+            self._set_ie_status("all",f"Export failed: {e}")
+            _log("[!]",f"Export all failed ({e})")
+            QMessageBox.warning(self,"Export All",f"Export failed:\n{e}")
+        finally:
+            prog.close()
+    def _save_template_text(self,title,default_name,flt,text):
+        p,_=QFileDialog.getSaveFileName(self,title,os.path.join(_abs(".."),default_name),flt)
+        if not p:return
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(p)),exist_ok=True)
+            with open(p,"w",encoding="utf-8",newline="") as f:f.write(text if text.endswith("\n") else text+"\n")
+            self._set_ie_status("tpl",f"Template saved: {os.path.basename(p)}")
+            _log("[+]",f"Template export -> {p}")
+            QMessageBox.information(self,"Template","Template exported.")
+        except Exception as e:
+            self._set_ie_status("tpl",f"Export failed: {e}")
             _log("[!]",f"Template export failed ({e})")
-            QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
+            QMessageBox.warning(self,"Template",f"Export failed:\n{e}")
+    def _human_template_text(self,kind,fmt):
+        if kind=="notes" and fmt=="md":return _import_template_markdown()
+        if kind=="notes" and fmt=="json":return _human_notes_json_template()
+        if kind=="commands" and fmt=="md":return _human_commands_md_template()
+        if kind=="commands" and fmt=="json":return _human_commands_json_template()
+        if kind=="targets" and fmt=="json":return _human_targets_json_template()
+        if kind=="targets" and fmt=="csv":return _human_targets_csv_template()
+        if kind=="target_values" and fmt=="json":return _human_target_values_json_template()
+        if kind=="target_values" and fmt=="csv":return _human_target_values_csv_template()
+        return ""
+    def _human_template_meta(self,kind,fmt):
+        names={"notes":"LOYA_Notes_Template","commands":"LOYA_Commands_Template","targets":"LOYA_Targets_Template","target_values":"LOYA_TargetValues_Template"}
+        labels={"notes":"Notes","commands":"Commands","targets":"Targets","target_values":"Target Values"}
+        ext={"md":"md","json":"json","csv":"csv","db":"db"}.get(fmt,fmt)
+        flt={"md":"Markdown (*.md)","json":"JSON (*.json)","csv":"CSV (*.csv)","db":"Database (*.db)"}.get(fmt,"All Files (*)")
+        return f"Export {labels.get(kind,'Template')} Template",f"{names.get(kind,'LOYA_Template')}.{ext}",flt
+    def _export_human_notes_db_template(self):
+        title,default,flt=self._human_template_meta("notes","db")
+        p,_=QFileDialog.getSaveFileName(self,title,os.path.join(_abs(".."),default),flt)
+        if not p:return
+        try:
+            if os.path.isfile(p):os.remove(p)
+            db=Note_LOYA_Database(p);db.ensure()
+            now=datetime.utcnow().isoformat()
+            con=sqlite3.connect(p);cur=con.cursor()
+            cur.execute("INSERT INTO Notes(note_name,group_name,content,created_at,updated_at) VALUES(?,?,?,?,?)",("Example Note","Examples","<h1>Example Note</h1><p>Write note content here.</p>",now,now))
+            cur.execute("INSERT INTO CommandsNotes(note_name,category,sub_category,command,tags,description,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",("Example Note","General","Shell","echo hello","demo","Example command",now,now))
+            con.commit();con.close()
+            self._set_ie_status("tpl",f"Template saved: {os.path.basename(p)}")
+            _log("[+]",f"DB template export -> {p}")
+            QMessageBox.information(self,"Template","Template exported.")
+        except Exception as e:
+            self._set_ie_status("tpl",f"Export failed: {e}")
+            _log("[!]",f"DB template export failed ({e})")
+            QMessageBox.warning(self,"Template",f"Export failed:\n{e}")
+    def _export_human_template(self,kind,fmt):
+        if kind=="notes" and fmt=="db":
+            self._export_human_notes_db_template();return
+        title,default,flt=self._human_template_meta(kind,fmt)
+        text=self._human_template_text(kind,fmt)
+        if not text:
+            QMessageBox.warning(self,"Template","Template is not available.")
+            return
+        self._save_template_text(title,default,flt,text)
+    def _ai_template_text(self,kind):
+        if kind=="notes":return _ai_notes_template()
+        if kind=="commands":return _ai_commands_template()
+        if kind=="targets":return _ai_targets_template()
+        if kind=="target_values":return _ai_target_values_template()
+        return ""
+    def _export_ai_template(self,kind):
+        names={"notes":"LOYA_Notes_AI_Template.md","commands":"LOYA_Commands_AI_Template.md","targets":"LOYA_Targets_AI_Template.md","target_values":"LOYA_TargetValues_AI_Template.md"}
+        labels={"notes":"Notes","commands":"Commands","targets":"Targets","target_values":"Target Values"}
+        text=self._ai_template_text(kind)
+        if not text:
+            QMessageBox.warning(self,"Template","Template is not available.")
+            return
+        self._save_template_text(f"Export {labels.get(kind,'AI')} AI Template",names.get(kind,"LOYA_AI_Template.md"),"Markdown (*.md)",text)
+    def _export_template_bundle(self,mode):
+        ai=mode=="ai"
+        default="LOYA_AI_Templates.zip" if ai else "LOYA_Human_Templates.zip"
+        p,_=QFileDialog.getSaveFileName(self,"Export AI Templates" if ai else "Export Human Templates",os.path.join(_abs(".."),default),"ZIP (*.zip)")
+        if not p:return
+        try:
+            entries=[]
+            if ai:
+                entries=[("Notes_AI_Template.md",_ai_notes_template()),("Commands_AI_Template.md",_ai_commands_template()),("Targets_AI_Template.md",_ai_targets_template()),("TargetValues_AI_Template.md",_ai_target_values_template())]
+            else:
+                entries=[("Notes_Template.md",_import_template_markdown()),("Notes_Template.json",_human_notes_json_template()),("Commands_Template.md",_human_commands_md_template()),("Commands_Template.json",_human_commands_json_template()),("Targets_Template.json",_human_targets_json_template()),("Targets_Template.csv",_human_targets_csv_template()),("TargetValues_Template.json",_human_target_values_json_template()),("TargetValues_Template.csv",_human_target_values_csv_template())]
+            with zipfile.ZipFile(p,"w",compression=zipfile.ZIP_DEFLATED) as z:
+                for name,text in entries:z.writestr(name,(text if text.endswith("\n") else text+"\n").encode("utf-8"))
+            self._set_ie_status("tpl",f"Templates saved: {os.path.basename(p)}")
+            _log("[+]",f"Template bundle export -> {p}")
+            QMessageBox.information(self,"Template","Templates exported.")
+        except Exception as e:
+            self._set_ie_status("tpl",f"Export failed: {e}")
+            _log("[!]",f"Template bundle export failed ({e})")
+            QMessageBox.warning(self,"Template",f"Export failed:\n{e}")
+    def _export_template(self):
+        self._export_human_template("notes","md")
     def _notes_export(self,kind):
         if not self._ensure_db():return
         notes=self.db.list_note_refs()
@@ -2858,10 +3092,10 @@ class _ImportExportPage(QWidget):
             if not p:return
             try:
                 self.db.export_note_markdown(name,p)
-                self.note_status.setText(f"Exported: {os.path.basename(p)}")
+                self._set_ie_status("note",f"Exported: {os.path.basename(p)}")
                 _log("[+]",f"Note export markdown -> {p}")
             except Exception as e:
-                self.note_status.setText(f"Export failed: {e}")
+                self._set_ie_status("note",f"Export failed: {e}")
                 _log("[!]",f"Note export markdown failed ({e})")
                 QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
         elif kind=="md_human":
@@ -2869,10 +3103,10 @@ class _ImportExportPage(QWidget):
             if not p:return
             try:
                 self.db.export_note_markdown_human(name,p)
-                self.note_status.setText(f"Exported: {os.path.basename(p)}")
+                self._set_ie_status("note",f"Exported: {os.path.basename(p)}")
                 _log("[+]",f"Note export human markdown -> {p}")
             except Exception as e:
-                self.note_status.setText(f"Export failed: {e}")
+                self._set_ie_status("note",f"Export failed: {e}")
                 _log("[!]",f"Note export human markdown failed ({e})")
                 QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
         elif kind=="html":
@@ -2880,10 +3114,10 @@ class _ImportExportPage(QWidget):
             if not p:return
             try:
                 self.db.export_note_html(name,p)
-                self.note_status.setText(f"Exported: {os.path.basename(p)}")
+                self._set_ie_status("note",f"Exported: {os.path.basename(p)}")
                 _log("[+]",f"Note export html -> {p}")
             except Exception as e:
-                self.note_status.setText(f"Export failed: {e}")
+                self._set_ie_status("note",f"Export failed: {e}")
                 _log("[!]",f"Note export html failed ({e})")
                 QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
     def _tv_import(self,kind):
@@ -2900,12 +3134,12 @@ class _ImportExportPage(QWidget):
         dups=[{"table":"TargetValues","key":_norm(d.get("key","")),"existing":f'{_norm(d.get("existing_key",""))}:{int((d.get("existing") or {}).get("priority",(d.get("existing") or {}).get("value",0)) or 0)}',"incoming":f'{_norm(d.get("key",""))}:{int((d.get("incoming") or {}).get("priority",(d.get("incoming") or {}).get("value",0)) or 0)}',"in_cmd":""} for d in (plan.get("dups") or [])]
         dlg=_ImportPreviewDialog(self,"Import Preview",plan,dups,source_label=os.path.basename(p))
         if dlg.exec()!=QDialog.DialogCode.Accepted:
-            self.tv_status.setText("Import cancelled.")
+            self._set_ie_status("tv","Import cancelled.")
             return
         decisions=dlg.decisions()
         res=self.tv.apply_plan(base,plan,decisions)
         self.tv.save(base)
-        self.tv_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
+        self._set_ie_status("tv",f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
         _log("[+]",f"TargetValues import ok {res}")
     def _tv_export(self,kind):
         data=self.tv.load()
@@ -2917,35 +3151,40 @@ class _ImportExportPage(QWidget):
             p,_=QFileDialog.getSaveFileName(self,"Export Target Values",os.path.join(_abs(".."),f"target_values_{_now()}.csv"),"CSV (*.csv)")
             if not p:return
             self.tv.export_csv(p,data)
-        self.tv_status.setText(f"Exported: {os.path.basename(p)}")
+        self._set_ie_status("tv",f"Exported: {os.path.basename(p)}")
         _log("[+]",f"TargetValues export ok ({kind}) -> {p}")
-    def _tg_import(self):
-        p,_=QFileDialog.getOpenFileName(self,"Import Targets",_abs(".."),"JSON (*.json)")
+    def _tg_import(self,kind="json"):
+        flt={"json":"JSON (*.json)","csv":"CSV (*.csv)"}[kind]
+        p,_=QFileDialog.getOpenFileName(self,"Import Targets",_abs(".."),flt)
         if not p:return
         base=self.tg.load()
         prog=_progress(self,"Import","Loading ...");prog.show()
         try:
-            incoming=self.tg.parse_json(p)
+            incoming=self.tg.parse_json(p) if kind=="json" else self.tg.parse_csv(p)
             plan=self.tg.build_plan(incoming,base)
         finally:
             prog.close()
         dups=[{"table":"Targets","key":_norm(d.get("key","")),"existing":self.tg._summ(d.get("existing")),"incoming":self.tg._summ(d.get("incoming")),"in_cmd":""} for d in (plan.get("dups") or [])]
         dlg=_ImportPreviewDialog(self,"Import Preview",plan,dups,source_label=os.path.basename(p))
         if dlg.exec()!=QDialog.DialogCode.Accepted:
-            self.tg_status.setText("Import cancelled.")
+            self._set_ie_status("tg","Import cancelled.")
             return
         decisions=dlg.decisions()
         base,res=self.tg.apply_plan(base,plan,decisions)
         self.tg.save(base)
-        self.tg_status.setText(f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
+        self._set_ie_status("tg",f"Imported: +{res.get('added',0)} rep:{res.get('replaced',0)} ow:{res.get('overwritten',0)} skip:{res.get('skipped',0)}")
         _log("[+]",f"Targets import ok {res}")
-    def _tg_export(self):
+    def _tg_export(self,kind="json"):
         data=self.tg.load()
-        p,_=QFileDialog.getSaveFileName(self,"Export Targets",os.path.join(_abs(".."),f"Targets_{_now()}.json"),"JSON (*.json)")
+        if kind=="json":
+            p,_=QFileDialog.getSaveFileName(self,"Export Targets",os.path.join(_abs(".."),f"Targets_{_now()}.json"),"JSON (*.json)")
+        else:
+            p,_=QFileDialog.getSaveFileName(self,"Export Targets",os.path.join(_abs(".."),f"Targets_{_now()}.csv"),"CSV (*.csv)")
         if not p:return
-        self.tg.export_json(p,data)
-        self.tg_status.setText(f"Exported: {os.path.basename(p)}")
-        _log("[+]",f"Targets export ok -> {p}")
+        if kind=="json":self.tg.export_json(p,data)
+        else:self.tg.export_csv(p,data)
+        self._set_ie_status("tg",f"Exported: {os.path.basename(p)}")
+        _log("[+]",f"Targets export ok ({kind}) -> {p}")
 class _TagsPage(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent)
@@ -3229,20 +3468,18 @@ class Widget(QWidget):
         self.sidebar=QFrame(self);self.sidebar.setObjectName("SideBar")
         sv=QVBoxLayout(self.sidebar);sv.setContentsMargins(10,10,10,10);sv.setSpacing(10)
         self.btn_backup=QToolButton(self.sidebar);self.btn_backup.setObjectName("NavBtn");self.btn_backup.setText("Backup");self.btn_backup.setCheckable(True)
-        self.btn_ie=QToolButton(self.sidebar);self.btn_ie.setObjectName("NavBtn");self.btn_ie.setText("Import & Export");self.btn_ie.setCheckable(True)
+        self.btn_ie=QToolButton(self.sidebar);self.btn_ie.setObjectName("NavBtn");self.btn_ie.setText("Import && Export");self.btn_ie.setCheckable(True)
         self.btn_tags=QToolButton(self.sidebar);self.btn_tags.setObjectName("NavBtn");self.btn_tags.setText("Tags");self.btn_tags.setCheckable(True)
         self.btn_security=QToolButton(self.sidebar);self.btn_security.setObjectName("NavBtn");self.btn_security.setText("Security");self.btn_security.setCheckable(True)
         self.btn_update=QToolButton(self.sidebar);self.btn_update.setObjectName("NavBtn");self.btn_update.setText("Update");self.btn_update.setCheckable(True)
         self.btn_recycle=QToolButton(self.sidebar);self.btn_recycle.setObjectName("NavBtn");self.btn_recycle.setText("Recycle Bin");self.btn_recycle.setCheckable(True)
-        self.btn_diag=QToolButton(self.sidebar);self.btn_diag.setObjectName("NavBtn");self.btn_diag.setText("Diagnostics");self.btn_diag.setCheckable(True)
         self.btn_backup.clicked.connect(lambda:self._nav(0))
         self.btn_ie.clicked.connect(lambda:self._nav(1))
         self.btn_tags.clicked.connect(lambda:self._nav(2))
         self.btn_security.clicked.connect(lambda:self._nav(3))
         self.btn_update.clicked.connect(lambda:self._nav(4))
         self.btn_recycle.clicked.connect(lambda:self._nav(5))
-        self.btn_diag.clicked.connect(lambda:self._nav(6))
-        sv.addWidget(self.btn_backup,0);sv.addWidget(self.btn_ie,0);sv.addWidget(self.btn_tags,0);sv.addWidget(self.btn_security,0);sv.addWidget(self.btn_update,0);sv.addWidget(self.btn_recycle,0);sv.addWidget(self.btn_diag,0);sv.addStretch(1)
+        sv.addWidget(self.btn_backup,0);sv.addWidget(self.btn_ie,0);sv.addWidget(self.btn_tags,0);sv.addWidget(self.btn_security,0);sv.addWidget(self.btn_update,0);sv.addWidget(self.btn_recycle,0);sv.addStretch(1)
         self.stack=_CurrentPageStack(self);self.stack.setObjectName("Stack")
         self.page_backup=_BackupPage(self.stack)
         self.page_ie=_ImportExportPage(self.stack)
@@ -3250,8 +3487,7 @@ class Widget(QWidget):
         self.page_security=_SecurityPage(self.stack)
         self.page_update=_UpdatePage(self.stack)
         self.page_recycle=_RecycleBinPage(self.stack)
-        self.page_diag=_DiagnosticsPage(self.stack)
-        self.stack.addWidget(self.page_backup);self.stack.addWidget(self.page_ie);self.stack.addWidget(self.page_tags);self.stack.addWidget(self.page_security);self.stack.addWidget(self.page_update);self.stack.addWidget(self.page_recycle);self.stack.addWidget(self.page_diag)
+        self.stack.addWidget(self.page_backup);self.stack.addWidget(self.page_ie);self.stack.addWidget(self.page_tags);self.stack.addWidget(self.page_security);self.stack.addWidget(self.page_update);self.stack.addWidget(self.page_recycle)
         self.scroll=QScrollArea(self);self.scroll.setObjectName("SettingsScroll")
         self.scroll.setWidgetResizable(False)
         self.scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -3294,15 +3530,14 @@ class Widget(QWidget):
                         g=it.geometry()
                         used=max(used,int(g.y()+g.height()))
                 except Exception:pass
-            if isinstance(cur,_DiagnosticsPage) and hfw>0:hint=max(used,hfw)
-            elif used>0:hint=used
+            if used>0:hint=used
             else:
                 if hfw>0:hint=max(hint,hfw)
                 try:hint=max(hint,int(cur.minimumSizeHint().height()))
                 except Exception:pass
                 try:hint=max(hint,int(cur.sizeHint().height()))
                 except Exception:pass
-        expand_pages=(_BackupPage,_ImportExportPage,_TagsPage,_RecycleBinPage)
+        expand_pages=(_BackupPage,_ImportExportPage,_TagsPage,_UpdatePage,_RecycleBinPage)
         target=(max(view_h,0) if isinstance(cur,expand_pages) else max(hint,0))
         width=max(view_w,0)
         if width>0 and (self.stack.width()!=width or self.stack.height()!=target):self.stack.setFixedSize(width,target)
@@ -3328,20 +3563,21 @@ class Widget(QWidget):
         except Exception:pass
         self._schedule_stack_sync()
     def _nav(self,i):
-        self.btn_backup.blockSignals(True);self.btn_ie.blockSignals(True);self.btn_tags.blockSignals(True);self.btn_security.blockSignals(True);self.btn_update.blockSignals(True);self.btn_recycle.blockSignals(True);self.btn_diag.blockSignals(True)
-        self.btn_backup.setChecked(i==0);self.btn_ie.setChecked(i==1);self.btn_tags.setChecked(i==2);self.btn_security.setChecked(i==3);self.btn_update.setChecked(i==4);self.btn_recycle.setChecked(i==5);self.btn_diag.setChecked(i==6)
-        self.btn_backup.blockSignals(False);self.btn_ie.blockSignals(False);self.btn_tags.blockSignals(False);self.btn_security.blockSignals(False);self.btn_update.blockSignals(False);self.btn_recycle.blockSignals(False);self.btn_diag.blockSignals(False)
+        self.btn_backup.blockSignals(True);self.btn_ie.blockSignals(True);self.btn_tags.blockSignals(True);self.btn_security.blockSignals(True);self.btn_update.blockSignals(True);self.btn_recycle.blockSignals(True)
+        self.btn_backup.setChecked(i==0);self.btn_ie.setChecked(i==1);self.btn_tags.setChecked(i==2);self.btn_security.setChecked(i==3);self.btn_update.setChecked(i==4);self.btn_recycle.setChecked(i==5)
+        self.btn_backup.blockSignals(False);self.btn_ie.blockSignals(False);self.btn_tags.blockSignals(False);self.btn_security.blockSignals(False);self.btn_update.blockSignals(False);self.btn_recycle.blockSignals(False)
         self.stack.setCurrentIndex(i)
         if i==0:
             try:self.page_backup._schedule_table_refresh()
             except Exception:pass
+        elif i==4:
+            try:self.page_update._load_all()
+            except Exception:pass
         elif i==5:
             try:self.page_recycle._load()
             except Exception:pass
-        elif i==6:
-            try:self.page_diag._load()
-            except Exception:pass
         self._schedule_stack_sync()
+        QTimer.singleShot(30,self._sync_stack_height)
         self._schedule_scroll_top()
     def _sync_button_sizes(self):
         nav=[b for b in self.findChildren(QToolButton) if b.objectName()=="NavBtn" and _norm(b.text())]

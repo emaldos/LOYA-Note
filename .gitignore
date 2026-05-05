@@ -15,7 +15,10 @@ Logs/
 Backups/
 Cores/Update/OldVersions/
 Cores/Update/state.json
+# Retired local modules
+Cores/LOYA_Chat/
 # Temporary files
+*.log
 *.tmp
 *.bak
 *.orig
@@ -33,3 +36,4 @@ dist/
 .vscode/
 Thumbs.db
 Desktop.ini
+.DS_Store

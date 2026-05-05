@@ -1,12 +1,13 @@
-import os,sqlite3,logging,importlib.util,re,html
+import os,sqlite3,logging,importlib.util,re,html,hashlib,json,base64
 from datetime import datetime,timezone
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QSize,QTimer,pyqtSignal
 from PyQt6.QtGui import QIcon,QAction,QFontMetrics,QColor
-from PyQt6.QtWidgets import QApplication,QWidget,QVBoxLayout,QHBoxLayout,QToolButton,QLineEdit,QTableWidget,QTableWidgetItem,QDialog,QFrame,QHeaderView,QComboBox,QLabel,QMessageBox,QSizePolicy,QMenu,QTextEdit
+from PyQt6.QtWidgets import QApplication,QWidget,QVBoxLayout,QHBoxLayout,QToolButton,QLineEdit,QTableWidget,QTableWidgetItem,QDialog,QFrame,QHeaderView,QComboBox,QLabel,QMessageBox,QSizePolicy,QMenu,QTextEdit,QPlainTextEdit
 from Cores import common_db as _common_db
 from Cores import note_refs as _note_refs
 from Cores import recycle_bin as _recycle_bin
+from Cores import CommandRelated as _command_related
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
 def _log_setup():
     d=_abs("..","Logs");os.makedirs(d,exist_ok=True)
@@ -49,9 +50,24 @@ def _clean_cmd(s):
     raw=re.sub(r"\n\s+","\n",raw)
     raw=re.sub(r"\s+\n","\n",raw)
     return raw.strip()
+def _cmd_norm_data(d):
+    d=d or {}
+    title=d.get("cmd_note_title","") if "cmd_note_title" in d else (d.get("title","") or d.get("note_name",""))
+    return {"cmd_note_title":_norm(title),"category":_norm(d.get("category","")),"sub_category":_norm(d.get("sub_category","") or d.get("sub","")),"description":_norm(d.get("description","")),"tags":_norm(d.get("tags","")),"command":(d.get("command","") or "").rstrip()}
+def _cmd_id(d):
+    x=_cmd_norm_data(d);raw="|".join([x.get("cmd_note_title",""),x.get("category",""),x.get("sub_category",""),x.get("description",""),x.get("tags",""),_norm(x.get("command",""))])
+    return hashlib.sha1(raw.encode("utf-8")).hexdigest()[:12] if raw else ""
+def _encode_cmd_data(d):
+    x=_cmd_norm_data(d);x["cid"]=_cmd_id(x)
+    raw=json.dumps(x,ensure_ascii=False)
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
 def _insert_cmdn_history(cur,cmd_id,note_name,category,subcat,cmd,tags,desc,action,action_at):
     try:
         cur.execute("INSERT INTO CommandsNotesHistory(cmd_id,note_name,category,sub_category,command,tags,description,action,action_at) VALUES(?,?,?,?,?,?,?,?,?)",(cmd_id,note_name,category,subcat,cmd,tags,desc,action,action_at))
+    except:pass
+def _insert_cmd_history(cur,cmd_id,note_id,note_name,cmd_note_title,category,subcat,desc,tags,cmd,action,action_at):
+    try:
+        cur.execute("INSERT INTO CommandsHistory(cmd_id,note_id,note_name,cmd_note_title,category,sub_category,description,tags,command,action,action_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",(cmd_id,note_id,note_name,cmd_note_title,category,subcat,desc,tags,cmd,action,action_at))
     except:pass
 def _parse_cmd_meta(meta):
     d={"cmd_note_title":"","category":"","sub_category":"","description":"","tags":""}
@@ -132,7 +148,7 @@ def _load_cmds():
             cur.execute(f"SELECT {sel} FROM CommandsNotes ORDER BY id DESC")
             for r in cur.fetchall():
                 rid=r[0];nn=r[1];c=r[2];sc=r[3];cmd=r[4];tags=r[5];desc=(r[6] if has_desc else "")
-                out.append({"id":int(rid),"src":"CommandsNotes","locked":False,"note_id":None,"note_name":_norm(nn) or "Unlinked","group_name":"","title":_norm(nn) or "Unlinked","category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
+                out.append({"id":int(rid),"src":"CommandsNotes","locked":False,"note_id":None,"note_name":_norm(nn) or "Unlinked","cmd_note_title":_norm(nn) or "Unlinked","group_name":"","title":_norm(nn) or "Unlinked","category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
         cc=set(_table_cols(cur,"Commands"))
         if {"note_name","category","sub_category","command","tags"}.issubset(cc):
             has_desc="description" in cc
@@ -152,10 +168,10 @@ def _load_cmds():
                 desc=(r[i] if has_desc else "");i+=1 if has_desc else 0
                 ttl=(r[i] if has_title else "")
                 nn=_norm(nn) or "Unlinked"
-                ttl=_norm(ttl) or nn
+                raw_ttl=_norm(ttl);ttl=raw_ttl or nn
                 nid=(int(note_id) if str(note_id).isdigit() else None)
                 grp=note_groups_by_id.get(nid,"") if nid is not None else note_groups_by_name.get(nn.lower(),"")
-                out.append({"id":int(rid),"src":"Commands","locked":True,"note_id":nid,"note_name":nn,"group_name":grp,"title":ttl,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
+                out.append({"id":int(rid),"src":"Commands","locked":False,"note_id":nid,"note_name":nn,"cmd_note_title":raw_ttl,"group_name":grp,"title":ttl,"category":_norm(c) or "Uncategorized","sub":_norm(sc) or "General","command":_clean_cmd(cmd),"tags":_norm(tags),"description":_norm(desc),"db":p})
         con.close()
         _log("[+]",f"Loaded commands: {len(out)} from {os.path.basename(p)}")
         return p,out
@@ -188,6 +204,62 @@ def _delete_cmd(item):
             return bool(cur.rowcount)
     except Exception as e:
         _log("[!]",f"Delete error ({e})")
+        return False
+def _linked_command_rows(dbp,item):
+    if not isinstance(item,dict):return []
+    target=_cmd_id(item);out=[]
+    try:
+        with sqlite3.connect(dbp,timeout=5) as con:
+            _ensure_schema(con);cur=con.cursor();cols=set(_table_cols(cur,"Commands"))
+            if not {"id","note_name","category","sub_category","command","tags"}.issubset(cols):return []
+            has_desc="description" in cols;has_title="cmd_note_title" in cols;has_note_id="note_id" in cols
+            sel="id"+(",note_id" if has_note_id else "")+",note_name,category,sub_category,command,tags"+(",description" if has_desc else "")+(",cmd_note_title" if has_title else "")
+            cur.execute(f"SELECT {sel} FROM Commands")
+            for r in cur.fetchall():
+                i=0;rid=r[i];i+=1;nid=(r[i] if has_note_id else None);i+=1 if has_note_id else 0;nn=r[i];i+=1;cat=r[i];i+=1;sub=r[i];i+=1;cmd=r[i];i+=1;tags=r[i];i+=1;desc=(r[i] if has_desc else "");i+=1 if has_desc else 0;ttl=(r[i] if has_title else "")
+                raw_ttl=_norm(ttl)
+                row={"id":int(rid),"note_id":int(nid) if str(nid).isdigit() else None,"note_name":_norm(nn),"cmd_note_title":raw_ttl,"title":raw_ttl or _norm(nn),"category":_norm(cat),"sub":_norm(sub),"sub_category":_norm(sub),"description":_norm(desc),"tags":_norm(tags),"command":_clean_cmd(cmd)}
+                if _cmd_id(row)==target:out.append(row)
+    except Exception as e:_log("[!]",f"Linked command lookup failed ({e})")
+    if not out and item.get("id") is not None:out=[item]
+    return out
+def _linked_note_count(dbp,item):
+    rows=_linked_command_rows(dbp,item);seen=set()
+    for r in rows:
+        key=r.get("note_id") if r.get("note_id") is not None else _norm(r.get("note_name","")).lower()
+        if key not in ("",None):seen.add(key)
+    return len(seen) or (1 if item.get("src")=="Commands" else 0)
+def _update_linked_command(dbp,old_item,new_item):
+    if not dbp or not isinstance(old_item,dict) or not isinstance(new_item,dict):return False
+    rows=_linked_command_rows(dbp,old_item);old_token=_encode_cmd_data(old_item);new_data=_cmd_norm_data(new_item);new_token=_encode_cmd_data(new_data);now=datetime.now(timezone.utc).isoformat()
+    try:
+        with sqlite3.connect(dbp,timeout=5) as con:
+            _ensure_schema(con);cur=con.cursor();cmd_cols=set(_table_cols(cur,"Commands"));note_cols=set(_table_cols(cur,"Notes"))
+            ids=[int(r.get("id")) for r in rows if str(r.get("id")).isdigit()]
+            if ids:
+                q=",".join("?" for _ in ids)
+                cur.execute(f"SELECT id,note_id,note_name,cmd_note_title,category,sub_category,description,tags,command FROM Commands WHERE id IN ({q})",ids)
+                for r in cur.fetchall():_insert_cmd_history(cur,r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7],r[8],"update",now)
+                cur.execute(f"UPDATE Commands SET cmd_note_title=?,category=?,sub_category=?,description=?,tags=?,command=?,updated_at=? WHERE id IN ({q})",(new_data["cmd_note_title"],new_data["category"],new_data["sub_category"],new_data["description"],new_data["tags"],new_data["command"],now,*ids))
+            note_ids=[];note_names=[]
+            for r in rows:
+                if r.get("note_id") is not None:note_ids.append(int(r.get("note_id")))
+                elif _norm(r.get("note_name","")):note_names.append(_norm(r.get("note_name","")))
+            notes=[]
+            if "content" in note_cols:
+                if note_ids:
+                    q=",".join("?" for _ in sorted(set(note_ids)));cur.execute(f"SELECT id,note_name,content FROM Notes WHERE id IN ({q})",sorted(set(note_ids)));notes+=cur.fetchall()
+                if note_names:
+                    q=",".join("?" for _ in sorted(set(note_names)));cur.execute(f"SELECT id,note_name,content FROM Notes WHERE note_name IN ({q})",sorted(set(note_names)));notes+=cur.fetchall()
+            seen=set()
+            for nid,nn,content in notes:
+                if nid in seen:continue
+                seen.add(nid);htmls=content or "";new_html=htmls.replace(old_token,new_token)
+                if new_html!=htmls:cur.execute("UPDATE Notes SET content=?,updated_at=? WHERE id=?",(new_html,now,int(nid)))
+            con.commit()
+            return True
+    except Exception as e:
+        _log("[!]",f"Linked command update failed ({e})")
         return False
 class Widget(QWidget):
     command_saved=pyqtSignal()
@@ -232,7 +304,8 @@ class Widget(QWidget):
         tw=QVBoxLayout(self.tbl_wrap);tw.setContentsMargins(10,10,10,10);tw.setSpacing(10)
         self.table=QTableWidget(self.tbl_wrap);self.table.setObjectName("TargetTable")
         self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels(["Note","Category","Sub","Tags","Command","Description","Inf","#","X"])
+        self.table.setHorizontalHeaderLabels(["Note","Category","Sub","Tags","Command","Description","Inf","Edit","X"])
+        self.table.setIconSize(QSize(20,20))
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
@@ -261,20 +334,29 @@ class Widget(QWidget):
         tw.addWidget(self.table,1)
         self.pager=QFrame(self.tbl_wrap);self.pager.setObjectName("CommandsPagerFrame")
         ph=QHBoxLayout(self.pager);ph.setContentsMargins(0,0,0,0);ph.setSpacing(10)
-        self.lbl_total=QLabel("",self.pager);self.lbl_total.setObjectName("CommandsTotal")
+        self.pager_left=QWidget(self.pager);self.pager_left.setFixedWidth(150)
+        left=QHBoxLayout(self.pager_left);left.setContentsMargins(0,0,0,0);left.setSpacing(0)
+        self.lbl_total=QLabel("",self.pager_left);self.lbl_total.setObjectName("CommandsTotal")
+        left.addWidget(self.lbl_total,0,Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         mid=QHBoxLayout();mid.setContentsMargins(0,0,0,0);mid.setSpacing(8)
-        self.btn_prev=QToolButton(self.pager);self.btn_prev.setObjectName("CommandsPagePrev");self.btn_prev.setText("<");self.btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_next=QToolButton(self.pager);self.btn_next.setObjectName("CommandsPageNext");self.btn_next.setText(">");self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.lbl_page=QLabel("0 of 0",self.pager);self.lbl_page.setObjectName("CommandsPageLabel");self.lbl_page.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.btn_prev=QToolButton(self.pager);self.btn_prev.setObjectName("CommandsPagePrev");self.btn_prev.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_next=QToolButton(self.pager);self.btn_next.setObjectName("CommandsPageNext");self.btn_next.setCursor(Qt.CursorShape.PointingHandCursor)
+        li=_abs("..","Assets","Left Arrow.png");ri=_abs("..","Assets","Right Arrow.png")
+        if os.path.isfile(li):self.btn_prev.setIcon(QIcon(li));self.btn_prev.setIconSize(QSize(18,18));self.btn_prev.setText("")
+        else:self.btn_prev.setText("<")
+        if os.path.isfile(ri):self.btn_next.setIcon(QIcon(ri));self.btn_next.setIconSize(QSize(18,18));self.btn_next.setText("")
+        else:self.btn_next.setText(">")
+        self.lbl_page=QLabel("0 of 0",self.pager);self.lbl_page.setObjectName("CommandsPageLabel");self.lbl_page.setAlignment(Qt.AlignmentFlag.AlignCenter);self.lbl_page.setMinimumWidth(72)
         self.btn_prev.clicked.connect(self._prev_page);self.btn_next.clicked.connect(self._next_page)
-        mid.addWidget(self.btn_prev,0);mid.addWidget(self.lbl_page,0);mid.addWidget(self.btn_next,0)
-        right=QHBoxLayout();right.setContentsMargins(0,0,0,0);right.setSpacing(8)
-        self.cmb_per=QComboBox(self.pager);self.cmb_per.setObjectName("CommandsPerPage")
+        mid.addWidget(self.btn_prev,0,Qt.AlignmentFlag.AlignCenter);mid.addWidget(self.lbl_page,0,Qt.AlignmentFlag.AlignCenter);mid.addWidget(self.btn_next,0,Qt.AlignmentFlag.AlignCenter)
+        self.pager_right=QWidget(self.pager);self.pager_right.setFixedWidth(150)
+        right=QHBoxLayout(self.pager_right);right.setContentsMargins(0,0,0,0);right.setSpacing(8)
+        self.cmb_per=QComboBox(self.pager_right);self.cmb_per.setObjectName("CommandsPerPage");self.cmb_per.setMinimumWidth(66);self.cmb_per.setMaximumWidth(66)
         self.cmb_per.addItems(["10","20","50","100"]);self.cmb_per.setCurrentText("10")
         self.cmb_per.currentTextChanged.connect(self._on_per_page)
-        self.lbl_per=QLabel("per page",self.pager);self.lbl_per.setObjectName("CommandsPerPageLbl")
+        self.lbl_per=QLabel("per page",self.pager_right);self.lbl_per.setObjectName("CommandsPerPageLbl")
         right.addWidget(self.cmb_per,0);right.addWidget(self.lbl_per,0)
-        ph.addWidget(self.lbl_total,0);ph.addStretch(1);ph.addLayout(mid,0);ph.addStretch(1);ph.addLayout(right,0)
+        ph.addWidget(self.pager_left,0);ph.addStretch(1);ph.addLayout(mid,0);ph.addStretch(1);ph.addWidget(self.pager_right,0)
         tw.addWidget(self.pager,0)
         v.addLayout(top);v.addWidget(self.tbl_wrap,1)
         QTimer.singleShot(0,self.reload)
@@ -344,15 +426,20 @@ class Widget(QWidget):
         self._set_item(r,3,_ell(n.get("tags",""),60),n.get("tags",""),Qt.AlignmentFlag.AlignCenter)
         self._set_item(r,4,_ell(n.get("command",""),140),n.get("command",""),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
         self._set_item(r,5,_ell(n.get("description",""),140),n.get("description",""),Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
-        self._set_item(r,6,"Inf",None,Qt.AlignmentFlag.AlignCenter,True)
-        self._set_item(r,7,("" if n.get("src")=="Commands" else "#"),None,Qt.AlignmentFlag.AlignCenter,True)
+        info=QTableWidgetItem("");info.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);info.setTextAlignment(Qt.AlignmentFlag.AlignCenter);info.setToolTip("Info")
+        ip=_abs("..","Assets","info.png")
+        if os.path.isfile(ip):info.setIcon(QIcon(ip))
+        else:info.setText("Inf")
+        self.table.setItem(r,6,info)
+        ed=QTableWidgetItem("");ed.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ed.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+        ei=_abs("..","Assets","Edit.png")
+        if os.path.isfile(ei):ed.setIcon(QIcon(ei))
+        else:ed.setText("Edit")
+        self.table.setItem(r,7,ed)
         self._set_item(r,8,"X",None,Qt.AlignmentFlag.AlignCenter,True)
-        info_it=self.table.item(r,6)
-        if info_it:info_it.setToolTip("Info")
         edit_it=self.table.item(r,7)
         if edit_it:
-            if n.get("src")=="Commands":edit_it.setToolTip("Linked command")
-            else:edit_it.setToolTip("Edit")
+            edit_it.setToolTip("Edit linked command" if n.get("src")=="Commands" else "Edit")
         del_it=self.table.item(r,8)
         if del_it:
             if n.get("src")=="Commands":
@@ -383,26 +470,7 @@ class Widget(QWidget):
         return getattr(w,"page_notes",None) if w else None
     def _open_related_note(self,n):
         if not isinstance(n,dict):return False
-        page=self._nav_notes()
-        if not page:return False
-        if hasattr(page,"open_note_ref"):
-            try:
-                if page.open_note_ref(note_id=n.get("note_id"),note_name=n.get("note_name","")):return True
-            except Exception:
-                pass
-        nid=n.get("note_id",None)
-        if nid is not None:
-            try:
-                if page.open_note_by_id(nid):return True
-            except Exception:
-                pass
-        name=_norm(n.get("note_name",""))
-        if name:
-            try:
-                if page.open_note_by_name(name):return True
-            except Exception:
-                pass
-        return False
+        return _command_related.open_related_notes(self,n,n.get("db") or self._dbp,self._nav_notes)
     def _ctx_menu(self,pos):
         ix=self.table.indexAt(pos)
         if not ix.isValid():return
@@ -411,33 +479,18 @@ class Widget(QWidget):
         n=self._row_item(row)
         if not n:return
         menu=QMenu(self)
-        open_note=QAction("Open related note",self)
-        open_note.setEnabled(bool(n.get("note_id") is not None or _norm(n.get("note_name",""))))
+        open_note=QAction("Open Related Note",self)
+        open_note.setEnabled(bool(_command_related.related_notes(n.get("db") or self._dbp,n)))
         open_note.triggered.connect(lambda:self._on_open_related_note(n))
         menu.addAction(open_note)
-        menu.addSeparator()
-        src="Linked" if n.get("src")=="Commands" else "Not Linked"
-        items=[
-            ("Copy Note Name",n.get("note_name","")),
-            ("Copy Group",n.get("group_name","")),
-            ("Copy Title",n.get("title","") or n.get("note_name","")),
-            ("Copy Category",n.get("category","")),
-            ("Copy Sub Category",n.get("sub","")),
-            ("Copy Tags",n.get("tags","")),
-            ("Copy Description",n.get("description","")),
-            ("Copy Command",n.get("command","")),
-            ("Copy Source",src),
-        ]
-        if n.get("note_id") is not None:items.append(("Copy Note ID",str(n.get("note_id"))))
-        if n.get("id") is not None:items.append(("Copy Command ID",str(n.get("id"))))
-        for label,val in items:
-            act=QAction(label,self)
-            act.setEnabled(bool(_norm(val)))
-            act.triggered.connect(lambda _,v=val:self._copy_text(v))
-            menu.addAction(act)
+        copy_cmd=QAction("Copy Command",self)
+        copy_cmd.setEnabled(bool(_norm(n.get("command",""))))
+        copy_cmd.triggered.connect(lambda:self._copy_text(n.get("command","")))
+        menu.addAction(copy_cmd)
         menu.exec(self.table.viewport().mapToGlobal(pos))
     def _on_open_related_note(self,n):
-        if self._open_related_note(n):return
+        res=self._open_related_note(n)
+        if res is None or res:return
         QMessageBox.information(self,"Open Note","Related note not found.")
     def _prev_page(self):
         if self._page>1:self._page-=1;self._render()
@@ -481,26 +534,78 @@ class Widget(QWidget):
         lines.append("Command:")
         lines.append(cmd)
         return "\n".join(lines).rstrip()
+    def _info_payload(self,n):
+        if not isinstance(n,dict):return {}
+        title=_norm(n.get("title") or n.get("note_name","") or "Command")
+        cmd=n.get("command","") or ""
+        src="Linked to Note" if n.get("src")=="Commands" else "Standalone"
+        try:rel=_command_related.related_notes(n.get("db") or self._dbp,n)
+        except Exception:rel=[]
+        names=[]
+        for r in rel[:3]:
+            v=_norm(r.get("title") or r.get("note_name") or r.get("name",""))
+            if v:names.append(v)
+        if len(rel)>3:names.append(f"+{len(rel)-3} more")
+        related=", ".join(names) if names else "-"
+        lines=max(1,len(str(cmd).splitlines()))
+        stats=f"{len(str(cmd))} chars | {lines} line" + ("" if lines==1 else "s")
+        rows=[("Used In",f"{len(rel)} note" + ("" if len(rel)==1 else "s")),("Related Notes",related),("Group",n.get("group_name","")),("Category",n.get("category","")),("Sub Category",n.get("sub","")),("Tags",n.get("tags","")),("Description",n.get("description","")),("Command Size",stats)]
+        return {"title":title,"cmd":cmd,"source":src,"related_count":len(rel),"rows":rows}
+    def _info_chip(self,parent,text,obj="CommandInfoChip"):
+        w=QLabel(text,parent);w.setObjectName(obj);w.setAlignment(Qt.AlignmentFlag.AlignCenter);w.setMinimumHeight(28);w.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse);return w
+    def _info_row(self,parent,k,v):
+        row=QFrame(parent);row.setObjectName("CommandInfoRow")
+        h=QHBoxLayout(row);h.setContentsMargins(12,8,12,8);h.setSpacing(12)
+        key=QLabel(k,row);key.setObjectName("CommandInfoKey");key.setFixedWidth(128);key.setAlignment(Qt.AlignmentFlag.AlignTop|Qt.AlignmentFlag.AlignLeft)
+        val=QLabel(_norm(v) or "-",row);val.setObjectName("CommandInfoValue");val.setWordWrap(True);val.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        h.addWidget(key,0);h.addWidget(val,1)
+        return row
     def _open_info(self,item):
         if not isinstance(item,dict):return
+        data=self._info_payload(item)
         dlg=QDialog(self);dlg.setObjectName("TargetDialog")
         dlg.setWindowTitle("Command Info")
         g=QApplication.primaryScreen().availableGeometry()
-        dlg.resize(min(760,int(g.width()*0.9)),min(520,int(g.height()*0.9)))
+        dlg.resize(min(780,int(g.width()*0.9)),min(620,int(g.height()*0.9)))
         ico=_abs("..","Assets","logox.png")
         if os.path.isfile(ico):dlg.setWindowIcon(QIcon(ico))
         lay=QVBoxLayout(dlg);lay.setContentsMargins(14,14,14,14);lay.setSpacing(12)
         frame=QFrame(dlg);frame.setObjectName("TargetDialogFrame")
-        v=QVBoxLayout(frame);v.setContentsMargins(12,12,12,12);v.setSpacing(10)
-        t=QLabel("Command Info",frame);t.setObjectName("TargetFormTitle")
+        v=QVBoxLayout(frame);v.setContentsMargins(14,14,14,14);v.setSpacing(12)
+        t=QLabel("Command Details",frame);t.setObjectName("TargetFormTitle")
         v.addWidget(t,0)
-        info=QTextEdit(frame);info.setObjectName("CardDetailCmd");info.setReadOnly(True);info.setAcceptRichText(False)
-        info.setPlainText(self._info_text(item))
-        v.addWidget(info,1)
+        hero=QFrame(frame);hero.setObjectName("CommandInfoHero")
+        hv=QVBoxLayout(hero);hv.setContentsMargins(14,12,14,12);hv.setSpacing(8)
+        top=QHBoxLayout();top.setContentsMargins(0,0,0,0);top.setSpacing(8)
+        title=QLabel(data.get("title","Command"),hero);title.setObjectName("CommandInfoTitle");title.setWordWrap(True);title.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        top.addWidget(title,1);top.addWidget(self._info_chip(hero,data.get("source","Standalone")),0);top.addWidget(self._info_chip(hero,f"{data.get('related_count',0)} related","CommandInfoChipBlue"),0)
+        sub=QLabel("Metadata, related note usage, and full command text",hero);sub.setObjectName("CommandInfoSub");sub.setWordWrap(True)
+        hv.addLayout(top);hv.addWidget(sub,0)
+        v.addWidget(hero,0)
+        details=QFrame(frame);details.setObjectName("CommandInfoSection")
+        dv=QVBoxLayout(details);dv.setContentsMargins(10,10,10,10);dv.setSpacing(6)
+        dh=QLabel("Details",details);dh.setObjectName("CommandInfoSectionTitle");dv.addWidget(dh,0)
+        rows=data.get("rows",[])
+        for i in range(0,len(rows),2):
+            pair=QHBoxLayout();pair.setContentsMargins(0,0,0,0);pair.setSpacing(8)
+            k,val=rows[i];pair.addWidget(self._info_row(details,k,val),1)
+            if i+1<len(rows):
+                k,val=rows[i+1];pair.addWidget(self._info_row(details,k,val),1)
+            else:pair.addStretch(1)
+            dv.addLayout(pair,0)
+        v.addWidget(details,0)
+        cmd_box=QFrame(frame);cmd_box.setObjectName("CommandInfoSection")
+        cv=QVBoxLayout(cmd_box);cv.setContentsMargins(10,10,10,10);cv.setSpacing(8)
+        ch=QLabel("Command",cmd_box);ch.setObjectName("CommandInfoSectionTitle");cv.addWidget(ch,0)
+        info=QPlainTextEdit(cmd_box);info.setObjectName("CommandInfoCommand");info.setReadOnly(True);info.setPlainText(data.get("cmd",""));info.setMinimumHeight(130)
+        cv.addWidget(info,1)
+        v.addWidget(cmd_box,1)
         bh=QHBoxLayout();bh.setContentsMargins(0,0,0,0);bh.setSpacing(10)
-        ok=QToolButton(frame);ok.setObjectName("TargetSaveBtn");ok.setCursor(Qt.CursorShape.PointingHandCursor);ok.setText("OK");ok.setMinimumHeight(30)
+        cp=QToolButton(frame);cp.setObjectName("CmdSaveBtn");cp.setCursor(Qt.CursorShape.PointingHandCursor);cp.setText("Copy Command");cp.setMinimumHeight(30);cp.clicked.connect(lambda:self._copy_text(item.get("command","")))
+        op=QToolButton(frame);op.setObjectName("CmdSaveBtn");op.setCursor(Qt.CursorShape.PointingHandCursor);op.setText("Open Related Note");op.setMinimumHeight(30);op.setEnabled(data.get("related_count",0)>0);op.clicked.connect(lambda:(dlg.accept(),self._on_open_related_note(item)))
+        ok=QToolButton(frame);ok.setObjectName("TargetSaveBtn");ok.setCursor(Qt.CursorShape.PointingHandCursor);ok.setText("Close");ok.setMinimumHeight(30)
         ok.clicked.connect(dlg.accept)
-        bh.addStretch(1);bh.addWidget(ok,0);bh.addStretch(1)
+        bh.addStretch(1);bh.addWidget(op,0);bh.addWidget(cp,0);bh.addWidget(ok,0);bh.addStretch(1)
         v.addLayout(bh,0)
         lay.addWidget(frame,1)
         dlg.exec()
@@ -525,8 +630,18 @@ class Widget(QWidget):
             if item:
                 try:w.set_item(item)
                 except:pass
-                try:w.set_edit_target(item.get("db"),item.get("id"))
-                except:pass
+                if item.get("src")=="Commands":
+                    cnt=len(_command_related.related_notes(item.get("db") or self._dbp,item)) or _linked_note_count(item.get("db") or self._dbp,item)
+                    txt=f"This command is used in {cnt} note{'s' if cnt!=1 else ''}. If you update it here, it will be updated in all related notes."
+                    try:w.set_warning_text(txt)
+                    except Exception:pass
+                    try:w.set_edit_target(item.get("db"),item.get("id"))
+                    except Exception:pass
+                    try:w.set_external_save(lambda data,old=dict(item):_update_linked_command(old.get("db") or self._dbp,old,data))
+                    except Exception:pass
+                else:
+                    try:w.set_edit_target(item.get("db"),item.get("id"))
+                    except:pass
             lay.addWidget(w,1)
             def _saved():
                 try:self.reload()
@@ -552,7 +667,6 @@ class Widget(QWidget):
             self._open_info(n)
             return
         if col==7:
-            if n.get("src")=="Commands":return
             _log("[*]",f"Edit clicked: {n.get('command','')[:40]}")
             self._open_add(n)
             return
@@ -569,5 +683,4 @@ class Widget(QWidget):
     def _on_cell_double(self,row,col):
         n=self._row_item(row)
         if not n:return
-        if n.get("src")=="Commands":return
         self._open_add(n)
