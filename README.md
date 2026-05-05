@@ -3,6 +3,7 @@
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/issues)
+
 LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, and update recovery.
 Version 5 starts on Notes, uses the custom LOYA title bar, and keeps the removed LOYA Chat module out of the main and mini navigation.
 ## Requirements
