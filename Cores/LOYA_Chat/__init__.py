@@ -1,1 +1,0 @@
-"""LOYA chat core."""

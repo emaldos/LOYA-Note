@@ -3,7 +3,7 @@ from logging.handlers import RotatingFileHandler
 from datetime import datetime,timezone
 from PyQt6.QtCore import Qt,QSize,QTimer
 from PyQt6.QtGui import QColor,QIcon,QIntValidator
-from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTableWidget,QTableWidgetItem,QHeaderView,QMessageBox,QComboBox,QTabWidget,QAbstractItemView,QDialog,QApplication,QScrollArea,QGridLayout,QInputDialog,QTextEdit,QPlainTextEdit,QCheckBox
+from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTableWidget,QTableWidgetItem,QHeaderView,QMessageBox,QComboBox,QTabWidget,QAbstractItemView,QDialog,QApplication,QScrollArea,QGridLayout,QInputDialog,QTextEdit,QPlainTextEdit,QCheckBox,QStyledItemDelegate
 from Cores.Update import health_check as _health_check
 from Cores import recycle_bin as _recycle_bin
 def _abs(*p):return os.path.join(os.path.dirname(os.path.abspath(__file__)),*p)
@@ -105,7 +105,23 @@ def _is_valid_key(k):
     rx=_KEY_RE_EXT if _allow_dots_colons() else _KEY_RE_STRICT
     if not rx.match(k):return False
     return any(ch.isalpha() for ch in k)
-_TOKEN_RE=re.compile(r"(cmdedit:|cmddelete:)([A-Za-z0-9_-]+)")
+class _InlineEditDelegate(QStyledItemDelegate):
+    def createEditor(self,parent,option,index):
+        ed=QLineEdit(parent);ed.setObjectName("TargetCellEdit");ed.setFrame(False)
+        ed.setAlignment(Qt.AlignmentFlag.AlignCenter if index.column()==1 else Qt.AlignmentFlag.AlignVCenter|Qt.AlignmentFlag.AlignLeft)
+        return ed
+    def setEditorData(self,editor,index):
+        try:editor.setText(str(index.data(Qt.ItemDataRole.EditRole) or ""))
+        except Exception:pass
+        try:editor.selectAll()
+        except Exception:pass
+    def setModelData(self,editor,model,index):
+        try:model.setData(index,editor.text(),Qt.ItemDataRole.EditRole)
+        except Exception:pass
+    def updateEditorGeometry(self,editor,option,index):
+        try:editor.setGeometry(option.rect.adjusted(1,1,-1,-1))
+        except Exception:editor.setGeometry(option.rect)
+_TOKEN_RE=re.compile(r"(cmdedit:|cmddelete:|cmdcard:)([A-Za-z0-9_-]+)")
 def _table_cols(cur,t):
     try:cur.execute(f"PRAGMA table_info({t})");return [r[1] for r in cur.fetchall()]
     except:return []
@@ -170,6 +186,17 @@ def _command_links_map(dbp,include_unlinked=False):
                 for k in keys:
                     lk=_kci(k)
                     links[lk]=links.get(lk,0)+1
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Notes'")
+        if cur.fetchone():
+            cols=set(_table_cols(cur,"Notes"))
+            if "content" in cols:
+                cur.execute("SELECT content FROM Notes WHERE content LIKE '%cmdedit:%' OR content LIKE '%cmdcard:%' OR content LIKE '%cmddelete:%'")
+                for (content,) in cur.fetchall():
+                    keys=set()
+                    for cmd in _note_token_commands(content):keys.update(_extract_keys_from_text(cmd))
+                    for k in keys:
+                        lk=_kci(k)
+                        links[lk]=links.get(lk,0)+1
         return links
     except Exception as e:
         _log("[!]",f"Read links from DB failed ({e})")
@@ -314,6 +341,16 @@ def _commands_for_key(dbp,key,include_unlinked=False):
             for note,cmd in cur.fetchall():
                 if not cmd:continue
                 out.append({"note":_norm(note) or "Unlinked","command":_clean_cmd_text(cmd),"src":label})
+        cur.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='Notes'")
+        if cur.fetchone():
+            cols=set(_table_cols(cur,"Notes"))
+            if "content" in cols:
+                field="note_name" if "note_name" in cols else "''"
+                cur.execute(f"SELECT {field},content FROM Notes WHERE content LIKE '%cmdedit:%' OR content LIKE '%cmdcard:%' OR content LIKE '%cmddelete:%'")
+                for note,content in cur.fetchall():
+                    for cmd in _note_token_commands(content):
+                        if lk in {_kci(x) for x in _extract_keys_from_text(cmd)}:
+                            out.append({"note":_norm(note) or "Note","command":cmd,"src":"Note block"})
         return out
     except Exception:
         return out
@@ -355,6 +392,15 @@ def _encode_cmd_token(data):
     raw=json.dumps(data,ensure_ascii=False)
     b=base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
     return b.rstrip("=")
+def _note_token_commands(text):
+    out=[];seen=set()
+    for _,token in _TOKEN_RE.findall(str(text or "")):
+        if token in seen:continue
+        seen.add(token)
+        d=_decode_cmd_token(token)
+        cmd=_clean_cmd_text(d.get("command","") if isinstance(d,dict) else "")
+        if cmd:out.append(cmd)
+    return out
 def _update_note_tokens(html_text,old_keys,new_key):
     if not html_text:return html_text
     def repl(m):
@@ -395,7 +441,7 @@ def _rename_placeholders_db(dbp,old_keys,new_key):
         if cur.fetchone():
             cols=set(_table_cols(cur,"Notes"))
             if "content" in cols:
-                q="SELECT id,content FROM Notes WHERE content LIKE '%{{%' AND content LIKE '%}}%'"
+                q="SELECT id,content FROM Notes WHERE (content LIKE '%{{%' AND content LIKE '%}}%') OR content LIKE '%cmdedit:%' OR content LIKE '%cmdcard:%' OR content LIKE '%cmddelete:%'"
                 cur.execute(q)
                 for rid,htmls in cur.fetchall():
                     new_html=_replace_placeholders(htmls,old_keys,new_key)
@@ -571,6 +617,35 @@ class Store:
                 t["updated"]=_now()
                 changed=True
         if save and changed:self.save_targets()
+    def _rename_target_value_keys(self,old_keys,new_key):
+        if not isinstance(old_keys,(list,tuple,set)):old_keys=[old_keys]
+        old_ci={_kci(k) for k in old_keys if _norm(k)}
+        nk=_norm(new_key)
+        if not old_ci or not nk:return False
+        changed=False
+        for t in self.targets:
+            vals=t.get("values",{})
+            if not isinstance(vals,dict):vals={}
+            nv={};moved=""
+            for k,v in vals.items():
+                if _kci(k) in old_ci:
+                    vv=_norm(v)
+                    if vv and not moved:moved=vv
+                else:nv[k]=v
+            target_key=None
+            for k in nv.keys():
+                if _kci(k)==_kci(nk):
+                    target_key=k
+                    break
+            if moved:
+                if target_key:
+                    if not _norm(nv.get(target_key,"")):nv[target_key]=moved
+                else:nv[nk]=moved
+            if nv!=vals:
+                t["values"]=nv
+                t["updated"]=_now()
+                changed=True
+        return changed
     def add_key(self,k,val,manual=True):
         nk=_norm(k)
         if not nk:return False,"Key is empty"
@@ -621,6 +696,7 @@ class Store:
         for k in old_actuals:self.values.pop(k,None)
         if new_actual and new_actual!=nk:self.values.pop(new_actual,None)
         self.values[nk]={"priority":new_pr,"manual":False}
+        self._rename_target_value_keys(cleaned,nk)
         for k in cleaned:_delete_key_stats(_db_path(),k)
         if new_actual and new_actual!=nk:_rename_key_stats(_db_path(),new_actual,nk)
         if not self.save_values():return False,"Save failed"
@@ -652,6 +728,7 @@ class Store:
         else:
             val=self.values.pop(old_actual)
             self.values[nk]=val
+        self._rename_target_value_keys([old_actual],nk)
         if not self.save_values():return False,"Save failed"
         self._prune_targets_to_current_keys(save=True)
         msg=f"Updated commands:{res.get('commands',0)} notes:{res.get('notes',0)}"
@@ -830,22 +907,24 @@ class TargetEditorDialog(QDialog):
         ico=_abs("..","Assets","logox.png")
         if os.path.isfile(ico):self.setWindowIcon(QIcon(ico))
         self.resize(900,640)
-        lay=QVBoxLayout(self);lay.setContentsMargins(14,14,14,14);lay.setSpacing(12)
+        lay=QVBoxLayout(self);lay.setContentsMargins(16,16,16,16);lay.setSpacing(12)
         box=QFrame(self);box.setObjectName("TargetDialogFrame")
-        v=QVBoxLayout(box);v.setContentsMargins(12,12,12,12);v.setSpacing(10)
+        v=QVBoxLayout(box);v.setContentsMargins(16,16,16,16);v.setSpacing(12)
         head=QHBoxLayout();head.setSpacing(10)
         self.title=QLabel("Edit Target" if self.target else "Add Target",box);self.title.setObjectName("TargetFormTitle")
         head.addWidget(self.title,1)
         v.addLayout(head)
         r1=QHBoxLayout();r1.setSpacing(10)
         self.in_name=QLineEdit(box);self.in_name.setObjectName("TargetName");self.in_name.setPlaceholderText("Target name")
-        r1.addWidget(QLabel("Name:",box),0);r1.addWidget(self.in_name,1)
+        name_lbl=QLabel("Name",box);name_lbl.setObjectName("TargetFieldLabel")
+        r1.addWidget(name_lbl,0);r1.addWidget(self.in_name,1)
         v.addLayout(r1)
         r2=QHBoxLayout();r2.setSpacing(10)
-        self.find=QLineEdit(box);self.find.setObjectName("TargetFieldSearch");self.find.setPlaceholderText("Search field (e.g., IP, URL, MAC) ...")
+        self.find=QLineEdit(box);self.find.setObjectName("TargetFieldSearch");self.find.setPlaceholderText("Search field element")
         self.find.textChanged.connect(self._on_find_preview)
         self.find.returnPressed.connect(self._focus_first_match)
-        r2.addWidget(QLabel("Find:",box),0);r2.addWidget(self.find,1)
+        find_lbl=QLabel("Find",box);find_lbl.setObjectName("TargetFieldLabel")
+        r2.addWidget(find_lbl,0);r2.addWidget(self.find,1)
         v.addLayout(r2)
         self.scroll=QScrollArea(box);self.scroll.setObjectName("TargetFieldsScroll");self.scroll.setWidgetResizable(True);self.scroll.setFrameShape(QFrame.Shape.NoFrame)
         self.wrap=QFrame(self.scroll);self.wrap.setObjectName("TargetFieldsWrap")
@@ -856,6 +935,8 @@ class TargetEditorDialog(QDialog):
         v.addWidget(self.scroll,1)
         fb=QHBoxLayout();fb.setSpacing(10)
         self.btn_save=QToolButton(box);self.btn_save.setObjectName("TargetSaveBtn");self.btn_save.setText("Save");self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor)
+        si=_abs("..","Assets","Save.png")
+        if os.path.isfile(si):self.btn_save.setIcon(QIcon(si));self.btn_save.setIconSize(QSize(18,18))
         self.btn_cancel=QToolButton(box);self.btn_cancel.setObjectName("TargetCancelBtn");self.btn_cancel.setText("Cancel");self.btn_cancel.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_save.clicked.connect(self._save)
         self.btn_cancel.clicked.connect(self.reject)
@@ -885,6 +966,7 @@ class TargetEditorDialog(QDialog):
             le=QLineEdit(self.wrap);le.setObjectName("TargetField");le.setPlaceholderText(f"{k} value")
             le.setText("" if preserve.get(k) is None else str(preserve.get(k,"")))
             lab=QLabel(k+":",self.wrap)
+            lab.setObjectName("TargetFieldLabel")
             base=c*2
             self.grid.addWidget(lab,r,base,1,1)
             self.grid.addWidget(le,r,base+1,1,1)
@@ -986,7 +1068,8 @@ class Widget(QWidget):
         tw=QVBoxLayout(self.tbl_wrap);tw.setContentsMargins(10,10,10,10);tw.setSpacing(10)
         self.table=QTableWidget(self.tbl_wrap);self.table.setObjectName("TargetTable")
         self.table.setColumnCount(4)
-        self.table.setHorizontalHeaderLabels(["Target","Status","#","X"])
+        self.table.setHorizontalHeaderLabels(["Target","Status","Edit","X"])
+        self.table.setIconSize(QSize(20,20))
         self.table.verticalHeader().setVisible(False)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1001,10 +1084,10 @@ class Widget(QWidget):
         fh=h.font();fh.setBold(True);fh.setWeight(800);h.setFont(fh)
         h.setStretchLastSection(False)
         h.setSectionResizeMode(0,QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(1,QHeaderView.ResizeMode.ResizeToContents)
+        h.setSectionResizeMode(1,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(2,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
-        self.table.setColumnWidth(2,44);self.table.setColumnWidth(3,44)
+        fm=self.table.fontMetrics();self.table.setColumnWidth(1,max(92,fm.horizontalAdvance("Not Used")+34));self.table.setColumnWidth(2,44);self.table.setColumnWidth(3,44)
         tw.addWidget(self.table,1)
         lay.addLayout(top)
         lay.addWidget(self.tbl_wrap,1)
@@ -1018,13 +1101,11 @@ class Widget(QWidget):
         self.key_val.returnPressed.connect(self._add_key)
         self.btn_key_add=QToolButton(self.tab_elements);self.btn_key_add.setObjectName("TargetMiniBtn");self.btn_key_add.setText("Add");self.btn_key_add.setCursor(Qt.CursorShape.PointingHandCursor)
         self.btn_key_add.clicked.connect(self._add_key)
-        self.btn_key_bulk=QToolButton(self.tab_elements);self.btn_key_bulk.setObjectName("TargetMiniBtn");self.btn_key_bulk.setText("Bulk Rename");self.btn_key_bulk.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.btn_key_bulk.clicked.connect(self._open_bulk_rename)
-        top.addWidget(self.key_in,2);top.addWidget(self.key_val,1);top.addWidget(self.btn_key_add,0);top.addWidget(self.btn_key_bulk,0)
+        top.addWidget(self.key_in,2);top.addWidget(self.key_val,1);top.addWidget(self.btn_key_add,0)
         lay.addLayout(top)
         left=QFrame(self.tab_elements);left.setObjectName("TargetKeysFrame")
         lv=QVBoxLayout(left);lv.setContentsMargins(10,10,10,10);lv.setSpacing(10)
-        self.key_filter=QLineEdit(left);self.key_filter.setObjectName("TargetKeyFilter");self.key_filter.setPlaceholderText("Filter keys...")
+        self.key_filter=QLineEdit(left);self.key_filter.setObjectName("TargetKeyFilter");self.key_filter.setPlaceholderText("Search for Key Element")
         self.key_filter.textChanged.connect(self._render_keys)
         self.key_pattern_toggle=QCheckBox("Allow dots/colons in keys",left)
         self.key_pattern_toggle.setObjectName("TargetKeyPatternToggle")
@@ -1040,13 +1121,17 @@ class Widget(QWidget):
         self.keys_table.setColumnCount(5)
         self.keys_table.setHorizontalHeaderLabels(["Key","Priority","Links","Show","X"])
         self.keys_table.verticalHeader().setVisible(False)
-        self.keys_table.setEditTriggers(QTableWidget.EditTrigger.DoubleClicked|QTableWidget.EditTrigger.SelectedClicked|QTableWidget.EditTrigger.EditKeyPressed)
+        self.keys_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.keys_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.keys_table.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self.keys_table.setSortingEnabled(False)
         self.keys_table.setAlternatingRowColors(False)
         self.keys_table.setShowGrid(True)
+        self._key_inline_delegate=_InlineEditDelegate(self.keys_table)
+        self.keys_table.setItemDelegateForColumn(0,self._key_inline_delegate)
+        self.keys_table.setItemDelegateForColumn(1,self._key_inline_delegate)
         self.keys_table.cellClicked.connect(self._on_key_cell)
+        self.keys_table.cellDoubleClicked.connect(self._on_key_double)
         self.keys_table.cellChanged.connect(self._on_key_cell_changed)
         self.keys_table.setWordWrap(False)
         try:self.keys_table.setTextElideMode(Qt.TextElideMode.ElideRight)
@@ -1079,6 +1164,46 @@ class Widget(QWidget):
     def _show_toast(self,msg,ms=3000):
         try:self._toast.show_msg(msg,ms)
         except:pass
+    def _refresh_related_after_key_change(self):
+        try:w=self.window()
+        except Exception:w=None
+        for attr in ("page_commands","page_searchcopy","page_notes"):
+            p=getattr(w,attr,None) if w else None
+            if not p or p is self:continue
+            try:
+                if hasattr(p,"reload"):p.reload()
+                elif hasattr(p,"refresh"):p.refresh()
+                elif hasattr(p,"refresh_view"):p.refresh_view()
+            except Exception:pass
+            if attr=="page_notes":
+                try:
+                    if hasattr(p,"_notes_cache"):p._notes_cache=[]
+                    if hasattr(p,"_render_list"):p._render_list()
+                    if hasattr(p,"_render_nav_list"):p._render_nav_list(force=True)
+                    rows=list(getattr(p,"_notes_cache",[]) or [])
+                    sel=_norm(getattr(p,"_nav_selected",""))
+                    if sel and hasattr(p,"_nav_open_note"):
+                        for n in rows:
+                            if _kci(n.get("note_name",""))==_kci(sel):
+                                p._nav_open_note(n)
+                                break
+                    nid=getattr(p,"_note_id",None)
+                    if nid is not None and not bool(getattr(p,"_dirty",False)) and hasattr(p,"_load_into_editor"):
+                        for n in rows:
+                            try:match=int(n.get("id"))==int(nid)
+                            except Exception:match=False
+                            if match:
+                                p._load_into_editor(n)
+                                break
+                except Exception:pass
+            try:
+                if hasattr(p,"_refresh_placeholder_keys"):p._refresh_placeholder_keys(force=True)
+                if hasattr(p,"_update_placeholder_helper"):p._update_placeholder_helper()
+            except Exception:pass
+    def _after_key_rename(self,info):
+        self._reload_elements()
+        self._refresh_related_after_key_change()
+        self._show_toast(f"Renamed: {info}",3000)
     def _toggle_key_pattern(self,checked):
         _set_allow_dots_colons(bool(checked))
         self.store=Store()
@@ -1191,8 +1316,7 @@ class Widget(QWidget):
                 QMessageBox.warning(self,"Bulk Rename",info)
                 return
             dlg.accept()
-            self._reload_elements()
-            self._show_toast(f"Bulk rename: {info}",3000)
+            self._after_key_rename(info)
         apply_btn.clicked.connect(do_apply)
         cancel_btn.clicked.connect(dlg.reject)
         dlg.exec()
@@ -1222,8 +1346,7 @@ class Widget(QWidget):
         if not ok2:
             QMessageBox.warning(w,"Rename Key",info)
             return
-        self._reload_elements()
-        self._show_toast(f"Renamed: {info}",3000)
+        self._after_key_rename(info)
     def _on_key_cell_changed(self,row,col):
         if getattr(self,"_table_updating",False):return
         if col==1:
@@ -1299,8 +1422,7 @@ class Widget(QWidget):
             it.setText(old_key)
             self._renaming=False
             return
-        self._reload_elements()
-        self._show_toast(f"Renamed: {info}",3000)
+        self._after_key_rename(info)
     def reload(self):
         self.store=Store()
         self._reload_elements()
@@ -1341,6 +1463,12 @@ class Widget(QWidget):
         self.keys_table.clearSelection()
         self._table_updating=False
         _log("[*]",f"Keys rendered: {len(items)}")
+    def _on_key_double(self,row,col):
+        if col not in (0,1):return
+        it=self.keys_table.item(row,col)
+        if not it:return
+        self.keys_table.setCurrentCell(row,col)
+        self.keys_table.editItem(it)
     def _on_key_cell(self,row,col):
         if col==3:
             it=self.keys_table.item(row,0)
@@ -1392,7 +1520,10 @@ class Widget(QWidget):
             name.setData(Qt.ItemDataRole.UserRole,t)
             st_txt,st_col=self._status_text(t.get("status","not_used"))
             st=QTableWidgetItem(st_txt);st.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);st.setTextAlignment(Qt.AlignmentFlag.AlignCenter);st.setForeground(st_col)
-            ed=QTableWidgetItem("#");ed.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ed.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
+            ed=QTableWidgetItem("");ed.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);ed.setTextAlignment(Qt.AlignmentFlag.AlignCenter);ed.setToolTip("Edit")
+            ei=_abs("..","Assets","Edit.png")
+            if os.path.isfile(ei):ed.setIcon(QIcon(ei))
+            else:ed.setText("Edit")
             xd=QTableWidgetItem("X");xd.setFlags(Qt.ItemFlag.ItemIsEnabled|Qt.ItemFlag.ItemIsSelectable);xd.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
             fe=ed.font();fe.setBold(True);fe.setWeight(800);ed.setFont(fe);xd.setFont(fe)
             self.table.setItem(r,0,name);self.table.setItem(r,1,st);self.table.setItem(r,2,ed);self.table.setItem(r,3,xd)

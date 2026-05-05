@@ -2,7 +2,7 @@ import os
 import json
 import re
 from PyQt6.QtCore import Qt, QTimer, QSize, pyqtSignal
-from PyQt6.QtGui import QIcon, QColor
+from PyQt6.QtGui import QIcon, QColor, QAction, QTextCharFormat, QTextCursor, QTextListFormat, QShortcut, QKeySequence
 from PyQt6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -19,12 +19,11 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QAbstractItemView,
     QApplication,
+    QTextEdit,
+    QMenu,
+    QMessageBox,
 )
-from Cores import SearchCore, Target
-try:
-    from Cores.LOYA_Chat import LOYA_Chat
-except Exception:
-    LOYA_Chat = None
+from Cores import SearchCore, Target, CommandRelated
 def _abs(*p):
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), *p)
 def _data_dir():
@@ -33,6 +32,8 @@ def _data_dir():
     return d
 def _settings_path():
     return os.path.join(_data_dir(), "settings.json")
+def _quick_space_path():
+    return os.path.join(_data_dir(), "QuicSpace.json")
 def _read_json(p, default):
     try:
         if not p or not os.path.isfile(p):
@@ -110,20 +111,6 @@ def _compress_cmd(cmd):
         return ""
     text = " ".join(lines)
     return re.sub(r"\s+", " ", text).strip()
-class MiniPlaceholder(QWidget):
-    def __init__(self, title, subtitle="Coming soon...", parent=None):
-        super().__init__(parent)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(12, 12, 12, 12)
-        layout.setSpacing(6)
-        t = QLabel(title, self)
-        t.setObjectName("PageTitle")
-        s = QLabel(subtitle, self)
-        s.setObjectName("PageSubTitle")
-        s.setWordWrap(True)
-        layout.addWidget(t)
-        layout.addWidget(s)
-        layout.addStretch(1)
 class MiniCommands(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -186,6 +173,8 @@ class MiniCommands(QWidget):
         self.table.setWordWrap(True)
         self.table.setTextElideMode(Qt.TextElideMode.ElideNone)
         self.table.cellClicked.connect(self._on_cell_click)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._ctx_menu)
         h = self.table.horizontalHeader()
         h.setSectionResizeMode(0, QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
@@ -328,6 +317,41 @@ class MiniCommands(QWidget):
         self.status_dot.style().polish(self.status_dot)
     def _preview_cmd(self, item):
         return self.rep.apply(item.get("command") or "")
+    def _has_related_note(self,item):
+        return bool(CommandRelated.related_notes(self._db_path or SearchCore._db_path(),item))
+    def _notes_page(self):
+        win=self.window()
+        owner=getattr(win,"_owner",None)
+        if owner:
+            try:win._restore_full_app()
+            except Exception:
+                try:owner.restore_from_mini()
+                except Exception:pass
+            try:owner.on_nav("notes")
+            except Exception:pass
+            return getattr(owner,"page_notes",None)
+        return None
+    def _open_related_note(self,item):
+        return CommandRelated.open_related_notes(self,item,self._db_path or SearchCore._db_path(),self._notes_page)
+    def _ctx_menu(self,pos):
+        ix=self.table.indexAt(pos)
+        if not ix.isValid():return
+        row=ix.row();self.table.selectRow(row);item=self._row_item(row)
+        if not item:return
+        menu=QMenu(self)
+        open_note=QAction("Open Related Note",self);open_note.setEnabled(self._has_related_note(item));open_note.triggered.connect(lambda:self._on_open_related_note(item))
+        copy_cmd=QAction("Copy Command",self);copy_cmd.triggered.connect(lambda:self._copy_command(item))
+        menu.addAction(open_note);menu.addAction(copy_cmd)
+        menu.exec(self.table.viewport().mapToGlobal(pos))
+    def _copy_command(self,item):
+        cmd=self._preview_cmd(item)
+        if cmd:
+            try:QApplication.clipboard().setText(cmd)
+            except Exception:pass
+    def _on_open_related_note(self,item):
+        res=self._open_related_note(item)
+        if res is None or res:return
+        QMessageBox.information(self,"Open Note","Related note not found.")
     def reload(self):
         self._db_path, self._notes = SearchCore._load_cmds(self._db_path)
         self._db_mtime = SearchCore._safe_mtime(self._db_path)
@@ -454,6 +478,158 @@ class MiniTargets(QWidget):
         mt = SearchCore._safe_mtime(self._targets_path)
         if mt != self._targets_mtime:
             self.reload()
+class MiniQuickSpace(QWidget):
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self.setObjectName("MiniQuickFrame")
+        self._loading=False
+        self._matches=[]
+        self._match_index=-1
+        self._save_flash_id=0
+        self._save_timer=QTimer(self)
+        self._save_timer.setInterval(1000)
+        self._save_timer.setSingleShot(True)
+        self._save_timer.timeout.connect(self._auto_save)
+        self._build_ui()
+        self._load()
+    def _build_ui(self):
+        root=QVBoxLayout(self);root.setContentsMargins(8,8,8,8);root.setSpacing(8)
+        self.search_bar=QFrame(self);self.search_bar.setObjectName("MiniQuickSearch");self.search_bar.setVisible(False)
+        sr=QHBoxLayout(self.search_bar);sr.setContentsMargins(6,4,6,4);sr.setSpacing(6)
+        self.search=QLineEdit(self.search_bar);self.search.setObjectName("MiniSearchInput");self.search.setPlaceholderText("Find...")
+        self.btn_prev=self._tool(self.search_bar,"Up Arrow.png","^","Previous")
+        self.btn_next=self._tool(self.search_bar,"Down Arrow.png","v","Next")
+        self.lbl_count=QLabel("",self.search_bar);self.lbl_count.setObjectName("MiniQuickCount")
+        self.btn_close=self._tool(self.search_bar,"","X","Close Search")
+        sr.addWidget(self.search,1);sr.addWidget(self.btn_prev,0);sr.addWidget(self.btn_next,0);sr.addWidget(self.lbl_count,0);sr.addWidget(self.btn_close,0)
+        root.addWidget(self.search_bar,0)
+        self.edit=QTextEdit(self);self.edit.setObjectName("MiniQuickText");self.edit.setAcceptRichText(True);self.edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
+        self.edit.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded);self.edit.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.edit.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu);self.edit.customContextMenuRequested.connect(self._context_menu)
+        self.edit.textChanged.connect(self._on_changed)
+        root.addWidget(self.edit,1)
+        bar=QFrame(self);bar.setObjectName("MiniQuickToolbar")
+        br=QHBoxLayout(bar);br.setContentsMargins(0,0,0,0);br.setSpacing(6)
+        self.btn_b=self._tool(bar,"bold.png","B","Bold");self.btn_i=self._tool(bar,"italic.png","I","Italic");self.btn_u=self._tool(bar,"underline.png","U","Underline");self.btn_list=self._tool(bar,"List.png","List","Bulleted List")
+        self.save_mark=QFrame(bar);self.save_mark.setObjectName("MiniQuickSaveMark");self.save_mark.setProperty("active",False);self.save_mark.setFixedSize(10,10)
+        self.btn_save=self._tool(bar,"Save.png","Save","Save")
+        for b in (self.btn_b,self.btn_i,self.btn_u):b.setCheckable(True)
+        self.btn_b.clicked.connect(self._fmt_bold);self.btn_i.clicked.connect(self._fmt_italic);self.btn_u.clicked.connect(self._fmt_under);self.btn_list.clicked.connect(self._fmt_list);self.btn_save.clicked.connect(lambda _:self.save_now())
+        for b in (self.btn_b,self.btn_i,self.btn_u,self.btn_list):br.addWidget(b,0)
+        br.addStretch(1)
+        br.addWidget(self.save_mark,0);br.addWidget(self.btn_save,0)
+        root.addWidget(bar,0)
+        self.search.textChanged.connect(self._search_changed)
+        self.btn_prev.clicked.connect(lambda:self._move_match(-1))
+        self.btn_next.clicked.connect(lambda:self._move_match(1))
+        self.btn_close.clicked.connect(self._close_search)
+        QShortcut(QKeySequence("Ctrl+F"),self,activated=self._show_search)
+        QShortcut(QKeySequence("Ctrl+S"),self,activated=self.save_now)
+        QShortcut(QKeySequence("Esc"),self,activated=self._close_search)
+    def _tool(self,parent,icon,text,tip):
+        b=QToolButton(parent);b.setObjectName("MiniQuickBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setToolTip(tip);b.setFixedSize(32,28)
+        p=_abs("..","Assets",icon) if icon else ""
+        if p and os.path.isfile(p):b.setIcon(QIcon(p));b.setIconSize(QSize(16,16));b.setText("")
+        else:b.setText(text)
+        return b
+    def _load(self):
+        self._loading=True
+        data=_read_json(_quick_space_path(),{})
+        if not isinstance(data,dict):data={}
+        html=data.get("html","")
+        text=data.get("text","")
+        wrap=bool(data.get("wrap",True))
+        if html:self.edit.setHtml(html)
+        elif text:self.edit.setPlainText(text)
+        self._set_wrap(wrap)
+        self._loading=False
+    def _auto_save(self):
+        self._save(True)
+    def _save(self,flash=False):
+        data={"html":self.edit.toHtml(),"text":self.edit.toPlainText(),"wrap":self.edit.lineWrapMode()!=QTextEdit.LineWrapMode.NoWrap}
+        if _write_json(_quick_space_path(),data) and flash:self._flash_save_mark()
+    def save_now(self):
+        if self._loading:return
+        self._save_timer.stop();self._save(True)
+    def _flash_save_mark(self):
+        self._save_flash_id+=1;n=self._save_flash_id;self._set_save_mark(True);QTimer.singleShot(500,lambda:self._hide_save_mark(n))
+    def _hide_save_mark(self,n):
+        if n==self._save_flash_id:self._set_save_mark(False)
+    def _set_save_mark(self,on):
+        self.save_mark.setProperty("active",bool(on));self.save_mark.style().unpolish(self.save_mark);self.save_mark.style().polish(self.save_mark);self.save_mark.update()
+    def _on_changed(self):
+        if self._loading:return
+        self._save_timer.start()
+        if self.search_bar.isVisible() and _norm(self.search.text()):self._highlight()
+    def _merge_fmt(self,fmt):
+        cur=self.edit.textCursor()
+        if not cur.hasSelection():cur.select(QTextCursor.SelectionType.WordUnderCursor)
+        cur.mergeCharFormat(fmt);self.edit.mergeCurrentCharFormat(fmt);self.edit.setTextCursor(cur);self._on_changed()
+    def _fmt_bold(self):
+        fmt=QTextCharFormat();fmt.setFontWeight(900 if self.btn_b.isChecked() else 400);self._merge_fmt(fmt)
+    def _fmt_italic(self):
+        fmt=QTextCharFormat();fmt.setFontItalic(bool(self.btn_i.isChecked()));self._merge_fmt(fmt)
+    def _fmt_under(self):
+        fmt=QTextCharFormat();fmt.setFontUnderline(bool(self.btn_u.isChecked()));self._merge_fmt(fmt)
+    def _fmt_list(self):
+        cur=self.edit.textCursor();lf=QTextListFormat();lf.setStyle(QTextListFormat.Style.ListDisc);lf.setIndent(1);cur.insertList(lf);self.edit.setTextCursor(cur);self._on_changed()
+    def _set_wrap(self,on):
+        self.edit.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth if on else QTextEdit.LineWrapMode.NoWrap)
+    def _context_menu(self,pos):
+        m=self.edit.createStandardContextMenu()
+        self._strip_unicode_actions(m)
+        m.addSeparator()
+        wrap=QAction("Word Wrap",self);wrap.setCheckable(True);wrap.setChecked(self.edit.lineWrapMode()!=QTextEdit.LineWrapMode.NoWrap)
+        wrap.triggered.connect(lambda checked:self._toggle_wrap(checked))
+        m.addAction(wrap)
+        m.exec(self.edit.viewport().mapToGlobal(pos))
+    def _strip_unicode_actions(self,m):
+        for a in list(m.actions()):
+            t=(a.text() or "").replace("&","").lower()
+            sm=a.menu()
+            if "unicode" in t and "control" in t:
+                m.removeAction(a);continue
+            if sm:self._strip_unicode_actions(sm)
+    def _toggle_wrap(self,checked):
+        self._set_wrap(bool(checked));self._save_timer.start()
+    def _show_search(self):
+        self.search_bar.setVisible(True);self.search.setFocus();self.search.selectAll();self._highlight()
+    def _close_search(self):
+        self.search_bar.setVisible(False);self.search.clear();self._clear_highlight();self.edit.setFocus()
+    def _search_changed(self,text):
+        if not _norm(text):
+            self._clear_highlight()
+            if self.search_bar.isVisible():QTimer.singleShot(0,self._close_search)
+            return
+        self._highlight()
+    def _clear_highlight(self):
+        self._matches=[];self._match_index=-1;self.edit.setExtraSelections([]);self.lbl_count.setText("")
+    def _highlight(self):
+        q=self.search.text()
+        if not q:self._clear_highlight();return
+        doc_text=self.edit.toPlainText();low=doc_text.lower();needle=q.lower();start=0;matches=[]
+        while needle:
+            i=low.find(needle,start)
+            if i<0:break
+            matches.append((i,i+len(q)));start=i+max(1,len(q))
+        sels=[]
+        fmt=QTextCharFormat();fmt.setBackground(QColor("#ffe86a"));fmt.setForeground(QColor("#000000"))
+        doc=self.edit.document()
+        for s,e in matches:
+            cur=QTextCursor(doc);cur.setPosition(s);cur.setPosition(e,QTextCursor.MoveMode.KeepAnchor)
+            sel=QTextEdit.ExtraSelection();sel.cursor=cur;sel.format=fmt;sels.append(sel)
+        self._matches=matches
+        if matches and (self._match_index<0 or self._match_index>=len(matches)):self._match_index=0
+        if not matches:self._match_index=-1
+        self.edit.setExtraSelections(sels);self._update_count()
+    def _update_count(self):
+        self.lbl_count.setText(f"{self._match_index+1}/{len(self._matches)}" if self._matches else "0/0")
+    def _move_match(self,delta):
+        if not self._matches:self._highlight()
+        if not self._matches:return
+        self._match_index=(self._match_index+delta)%len(self._matches)
+        s,e=self._matches[self._match_index]
+        cur=QTextCursor(self.edit.document());cur.setPosition(s);cur.setPosition(e,QTextCursor.MoveMode.KeepAnchor);self.edit.setTextCursor(cur);self.edit.ensureCursorVisible();self._update_count()
 class MiniWindow(QWidget):
     def __init__(self, owner=None):
         super().__init__(None)
@@ -473,6 +649,17 @@ class MiniWindow(QWidget):
             self.setWindowIcon(QIcon(ico))
         self._build_ui()
         self._load_state()
+    def _asset_icon(self,name):
+        p = _abs("..", "Assets", name)
+        return QIcon(p) if os.path.isfile(p) else QIcon()
+    def _apply_button_icon(self,btn,name,fallback="",size=18):
+        ico = self._asset_icon(name)
+        if not ico.isNull():
+            btn.setIcon(ico)
+            btn.setIconSize(QSize(size, size))
+            btn.setText("")
+        else:
+            btn.setText(fallback)
     def _build_ui(self):
         root = QVBoxLayout(self)
         root.setContentsMargins(10, 10, 10, 10)
@@ -491,51 +678,37 @@ class MiniWindow(QWidget):
         self.tabbar.setObjectName("MiniTabs")
         self.tabbar.setExpanding(False)
         self.tabbar.addTab("Commands")
-        self.tabbar.addTab("LOYA")
         self.tabbar.addTab("Targets")
+        self.tabbar.addTab("Quick Space")
         bar_layout.addWidget(self.tabbar, 0)
         bar_layout.addStretch(1)
         self.btn_collapse = QToolButton(bar)
         self.btn_collapse.setObjectName("MiniControlBtn")
-        self.btn_collapse.setText("v")
-        self.btn_collapse.setToolTip("Collapse")
-        self.btn_collapse.clicked.connect(lambda: self._set_collapsed(True))
-        self.btn_expand = QToolButton(bar)
-        self.btn_expand.setObjectName("MiniControlBtn")
-        self.btn_expand.setText("^")
-        self.btn_expand.setToolTip("Expand")
-        self.btn_expand.clicked.connect(lambda: self._set_collapsed(False))
+        self.btn_collapse.setToolTip("Close preview")
+        self.btn_collapse.clicked.connect(self._toggle_collapsed)
         self.btn_restore = QToolButton(bar)
         self.btn_restore.setObjectName("MiniControlBtn")
-        self.btn_restore.setText("<>")
-        self.btn_restore.setToolTip("Restore full app")
+        self._apply_button_icon(self.btn_restore, "Expand.png", "<>", 18)
+        self.btn_restore.setToolTip("Expand to original view")
         self.btn_restore.clicked.connect(self._restore_full_app)
         self.btn_pin = QToolButton(bar)
         self.btn_pin.setObjectName("MiniPinBtn")
-        self.btn_pin.setText("On Top")
+        self._apply_button_icon(self.btn_pin, "pin.png", "Pin", 18)
         self.btn_pin.setCheckable(True)
-        self.btn_pin.setToolTip("Always on top")
+        self.btn_pin.setToolTip("Pin on top")
         self.btn_pin.clicked.connect(self._toggle_on_top)
-        self.btn_close = QToolButton(bar)
-        self.btn_close.setObjectName("MiniControlBtn")
-        self.btn_close.setText("X")
-        self.btn_close.setToolTip("Close app")
-        self.btn_close.clicked.connect(lambda: QApplication.instance().quit())
-        for b in (self.btn_collapse, self.btn_expand, self.btn_restore, self.btn_pin, self.btn_close):
+        for b in (self.btn_collapse, self.btn_restore, self.btn_pin):
             bar_layout.addWidget(b, 0)
         frame_layout.addWidget(bar, 0)
         self.stack = QStackedWidget(frame)
         self.stack.setObjectName("MiniStack")
         self.stack.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.page_commands = MiniCommands(self.stack)
-        if LOYA_Chat and hasattr(LOYA_Chat, "Widget"):
-            self.page_loya = LOYA_Chat.Widget(self.stack)
-        else:
-            self.page_loya = MiniPlaceholder("LOYA", "Coming soon...", self.stack)
         self.page_targets = MiniTargets(self.stack)
+        self.page_quick = MiniQuickSpace(self.stack)
         self.stack.addWidget(self.page_commands)
-        self.stack.addWidget(self.page_loya)
         self.stack.addWidget(self.page_targets)
+        self.stack.addWidget(self.page_quick)
         self.stack.setCurrentIndex(0)
         self.tabbar.currentChanged.connect(self.stack.setCurrentIndex)
         self.page_targets.target_changed.connect(self.page_commands.on_target_changed)
@@ -586,13 +759,21 @@ class MiniWindow(QWidget):
         self._save_state()
     def _toggle_on_top(self):
         self._set_on_top(self.btn_pin.isChecked())
+    def _toggle_collapsed(self):
+        self._set_collapsed(not self._collapsed)
+    def _update_collapse_button(self):
+        if self._collapsed:
+            self._apply_button_icon(self.btn_collapse, "Down Arrow.png", "v", 18)
+            self.btn_collapse.setToolTip("Open preview")
+        else:
+            self._apply_button_icon(self.btn_collapse, "Up Arrow.png", "^", 18)
+            self.btn_collapse.setToolTip("Close preview")
     def _set_collapsed(self, collapsed, save=True):
         collapsed = bool(collapsed)
         if collapsed and not self._collapsed:
             self._expanded_size = self.size()
         self._collapsed = collapsed
-        self.btn_collapse.setEnabled(not self._collapsed)
-        self.btn_expand.setEnabled(self._collapsed)
+        self._update_collapse_button()
         if self._collapsed:
             self.tabbar.setVisible(False)
             self.stack.setVisible(False)
@@ -608,12 +789,16 @@ class MiniWindow(QWidget):
         if save:
             self._save_state()
     def _restore_full_app(self):
+        self._save_quick_space()
         self._save_state()
         if self._owner and hasattr(self._owner, "restore_from_mini"):
             try:
                 self._owner.restore_from_mini()
             except Exception:
                 pass
+    def _save_quick_space(self):
+        try:self.page_quick.save_now()
+        except Exception:pass
     def moveEvent(self, e):
         super().moveEvent(e)
         if not self._collapsed:
@@ -626,6 +811,7 @@ class MiniWindow(QWidget):
         self._schedule_save()
     def closeEvent(self, e):
         try:
+            self._save_quick_space()
             self._save_state()
         finally:
             QApplication.instance().quit()

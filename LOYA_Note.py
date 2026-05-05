@@ -1,8 +1,8 @@
 import os,sys,importlib.util,logging,time,subprocess
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QSize,QPropertyAnimation,QEasingCurve,QTimer
-from PyQt6.QtGui import QIcon
-from PyQt6.QtWidgets import QApplication,QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QFrame,QLabel,QStackedWidget,QSizePolicy,QToolButton,QMessageBox
+from PyQt6.QtGui import QIcon,QCursor
+from PyQt6.QtWidgets import QApplication,QMainWindow,QWidget,QHBoxLayout,QVBoxLayout,QFrame,QLabel,QStackedWidget,QSizePolicy,QToolButton,QMessageBox,QLineEdit,QComboBox,QSpinBox,QTextEdit,QPlainTextEdit,QTextBrowser,QPushButton,QSizeGrip
 from Cores.Update import health_check as _health_check
 from Cores.Update import APP_NAME as _UPDATE_APP_NAME
 from Cores.Update import DEFAULT_APP_VERSION as _DEFAULT_APP_VERSION
@@ -140,80 +140,79 @@ def _on_app_about_to_quit():
     _security_encrypt_on_exit()
     try:_health_check.mark_launch_completed(True)
     except Exception as e:_log("[!]",f"Launch state completion failed ({e})")
-class NavBtn(QToolButton):
+class BottomNavBtn(QToolButton):
     def __init__(self,icon_path,text,parent=None):
         super().__init__(parent)
-        self._txt=text;self.btn_size=52
+        self._txt=text
+        self.setObjectName("BottomNavBtn")
         self.setCheckable(True);self.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.setSizePolicy(QSizePolicy.Policy.Expanding,QSizePolicy.Policy.Fixed)
-        self.setMinimumHeight(self.btn_size);self.setIconSize(QSize(20,20))
+        self.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed)
+        self.setFixedSize(78,50);self.setIconSize(QSize(18,18))
         if icon_path and os.path.isfile(icon_path):self.setIcon(QIcon(icon_path))
         f=self.font();f.setBold(True);self.setFont(f)
-        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setStyleSheet("QToolButton{padding-left:12px;text-align:left;}")
-        self.setText(f"\u2003{text}")
-class SideBar(QFrame):
+        self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.setText(text)
+class BottomNav(QFrame):
     def __init__(self,on_select,parent=None):
         super().__init__(parent)
         self.on_select=on_select
-        self.setObjectName("SideBar")
-        self.expanded_w=170;self.collapsed_w=72;self._expanded=True
-        self._side_pad=10
-        self.setMinimumWidth(self.expanded_w);self.setMaximumWidth(self.expanded_w)
-        self.anim_max=QPropertyAnimation(self,b"maximumWidth");self.anim_min=QPropertyAnimation(self,b"minimumWidth")
+        self.setObjectName("BottomNav")
+        self.collapsed_h=12;self.expanded_h=76;self._expanded=False
+        self.setMouseTracking(True);self.setSizePolicy(QSizePolicy.Policy.Fixed,QSizePolicy.Policy.Fixed);self.setFixedWidth(490)
+        self.setMinimumHeight(self.collapsed_h);self.setMaximumHeight(self.collapsed_h)
+        self.anim_max=QPropertyAnimation(self,b"maximumHeight");self.anim_min=QPropertyAnimation(self,b"minimumHeight")
         for a in (self.anim_max,self.anim_min):a.setDuration(220);a.setEasingCurve(QEasingCurve.Type.InOutCubic)
-        self.v=QVBoxLayout(self);self.v.setContentsMargins(self._side_pad,self._side_pad,self._side_pad,self._side_pad);self.v.setSpacing(8)
-        self.toggle=QToolButton(self);self.toggle.setObjectName("SideToggle");self.toggle.setCursor(Qt.CursorShape.PointingHandCursor);self.toggle.setFixedSize(52,52);self.toggle.setText("")
-        ico=_abs("Assets","Side_Bar.png")
-        if os.path.isfile(ico):self.toggle.setIcon(QIcon(ico));self.toggle.setIconSize(QSize(20,20))
-        self.toggle.clicked.connect(self._toggle)
-        self.v.addWidget(self.toggle,0,Qt.AlignmentFlag.AlignHCenter)
-        self.btn_chat=NavBtn(_abs("Assets","AI.png"),"LOYA")
-        self.btn_notes=NavBtn(_abs("Assets","Home.png"),"Notes")
-        self.btn_commands=NavBtn(_abs("Assets","command-line.png"),"Commands")
-        self.btn_target=NavBtn(_abs("Assets","Target.png"),"Targets")
-        self.btn_search=NavBtn(_abs("Assets","Search.png"),"Snippets")
-        self.btn_settings=NavBtn(_abs("Assets","Setting.png"),"Settings")
-        self.btn_chat.clicked.connect(lambda:self.on_select("chat"))
+        self.v=QVBoxLayout(self);self.v.setContentsMargins(8,3,8,6);self.v.setSpacing(4)
+        self.handle=QFrame(self);self.handle.setObjectName("BottomNavHandle");self.handle.setFixedSize(90,4)
+        self.row=QFrame(self);self.row.setObjectName("BottomNavRow")
+        r=QHBoxLayout(self.row);r.setContentsMargins(0,0,0,0);r.setSpacing(8)
+        self.btn_notes=BottomNavBtn(_abs("Assets","Home.png"),"Notes")
+        self.btn_commands=BottomNavBtn(_abs("Assets","command-line.png"),"Commands")
+        self.btn_target=BottomNavBtn(_abs("Assets","Target.png"),"Targets")
+        self.btn_search=BottomNavBtn(_abs("Assets","Search.png"),"Snippets")
+        self.btn_settings=BottomNavBtn(_abs("Assets","Setting.png"),"Settings")
         self.btn_notes.clicked.connect(lambda:self.on_select("notes"))
         self.btn_commands.clicked.connect(lambda:self.on_select("commands"))
         self.btn_target.clicked.connect(lambda:self.on_select("targets"))
         self.btn_search.clicked.connect(lambda:self.on_select("searchcopy"))
         self.btn_settings.clicked.connect(lambda:self.on_select("settings"))
-        self.v.addWidget(self.btn_chat)
-        self.v.addWidget(self.btn_notes)
-        self.v.addWidget(self.btn_commands)
-        self.v.addWidget(self.btn_target)
-        self.v.addWidget(self.btn_search)
-        self.v.addStretch(1)
-        self.v.addWidget(self.btn_settings)
-        self.set_expanded(True,instant=True)
-        _log("[+]",f"Sidebar ready expanded_w={self.expanded_w} collapsed_w={self.collapsed_w}")
-    def resizeEvent(self,e):
-        if e is None:
-            return
-        super().resizeEvent(e)
+        r.addStretch(1)
+        for b in (self.btn_notes,self.btn_commands,self.btn_target,self.btn_search,self.btn_settings):r.addWidget(b)
+        r.addStretch(1)
+        self.v.addWidget(self.handle,0,Qt.AlignmentFlag.AlignHCenter)
+        self.v.addWidget(self.row,0)
+        self.set_expanded(False,instant=True)
+        _log("[+]",f"Bottom nav ready expanded_h={self.expanded_h} collapsed_h={self.collapsed_h}")
     def set_expanded(self,expanded,instant=False):
+        if self._expanded==expanded and not instant:return
         self._expanded=expanded
-        self.v.setContentsMargins(self._side_pad,self._side_pad,self._side_pad,self._side_pad)
-        btns=[self.btn_chat,self.btn_notes,self.btn_commands,self.btn_target,self.btn_search,self.btn_settings]
-        for b in btns:
-            b.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-            if expanded:
-                b.setText(f"\u2003{b._txt}");b.setMinimumWidth(0);b.setMaximumWidth(16777215)
-            else:
-                b.setText("");s=getattr(b,"btn_size",44);b.setMinimumWidth(s);b.setMaximumWidth(s)
-        w=self.expanded_w if expanded else self.collapsed_w
-        _log("[*]",f"Sidebar {'expanded' if expanded else 'collapsed'} width={w}")
-        if instant:self.setMinimumWidth(w);self.setMaximumWidth(w);self.resizeEvent(None);return
+        h=self.expanded_h if expanded else self.collapsed_h
+        if expanded:self.row.setVisible(True)
+        _log("[*]",f"Bottom nav {'expanded' if expanded else 'collapsed'} height={h}")
+        if instant:
+            self.setMinimumHeight(h);self.setMaximumHeight(h);self.row.setVisible(expanded);return
         for a in (self.anim_max,self.anim_min):
             a.stop()
-            a.setStartValue(self.maximumWidth() if a is self.anim_max else self.minimumWidth())
-            a.setEndValue(w)
+            a.setStartValue(self.maximumHeight() if a is self.anim_max else self.minimumHeight())
+            a.setEndValue(h)
             a.start()
-    def _toggle(self):self.set_expanded(not self._expanded)
+        if not expanded:QTimer.singleShot(230,self._hide_row_if_collapsed)
+    def _hide_row_if_collapsed(self):
+        if not self._expanded:self.row.setVisible(False)
+    def enterEvent(self,e):
+        self.set_expanded(True)
+        try:super().enterEvent(e)
+        except Exception:pass
+    def leaveEvent(self,e):
+        QTimer.singleShot(140,self._hide_if_out)
+        try:super().leaveEvent(e)
+        except Exception:pass
+    def _hide_if_out(self):
+        try:
+            if self.rect().contains(self.mapFromGlobal(QCursor.pos())):return
+        except Exception:pass
+        self.set_expanded(False)
     def select(self,key):
-        self.btn_chat.setChecked(key=="chat")
         self.btn_notes.setChecked(key=="notes")
         self.btn_commands.setChecked(key=="commands")
         self.btn_target.setChecked(key=="targets")
@@ -227,12 +226,113 @@ class PlaceholderPage(QWidget):
         t=QLabel(title);t.setObjectName("PageTitle")
         s=QLabel(subtitle);s.setObjectName("PageSubTitle");s.setWordWrap(True)
         v.addWidget(t);v.addWidget(s);v.addStretch(1)
+class AppTitleBar(QFrame):
+    def __init__(self,owner,parent=None):
+        super().__init__(parent)
+        self.owner=owner
+        self._drag_pos=None
+        self.setObjectName("AppTitleBar")
+        self.setFixedHeight(42)
+        self.setMouseTracking(True)
+        h=QHBoxLayout(self);h.setContentsMargins(12,0,8,0);h.setSpacing(8)
+        self.ico=QLabel(self);self.ico.setObjectName("AppTitleIcon");self.ico.setFixedSize(24,24)
+        ip=_abs("Assets","logox.png")
+        if os.path.isfile(ip):self.ico.setPixmap(QIcon(ip).pixmap(QSize(22,22)))
+        self.title=QLabel(f"{APP_NAME} v{_app_version()}",self);self.title.setObjectName("AppTitleText")
+        self.btn_shrink=self._btn("WindowShrinkBtn","Mini Screen",_abs("Assets","Shrink.png"),"")
+        self.btn_min=self._btn("WindowControlBtn","Minimize",_abs("Assets","minimize-sign.png"),"-")
+        self.btn_max=self._btn("WindowControlBtn","Maximize",_abs("Assets","window.png"),"[]")
+        self.btn_close=self._btn("WindowCloseBtn","Close",_abs("Assets","Close.png"),"X")
+        self.btn_shrink.clicked.connect(owner.open_mini)
+        self.btn_min.clicked.connect(owner.showMinimized)
+        self.btn_max.clicked.connect(self._toggle_max)
+        self.btn_close.clicked.connect(owner.close)
+        h.addWidget(self.ico,0);h.addWidget(self.title,0);h.addStretch(1)
+        for b in (self.btn_shrink,self.btn_min,self.btn_max,self.btn_close):h.addWidget(b,0)
+    def _btn(self,obj,tip,icon_path="",text=""):
+        b=QToolButton(self);b.setObjectName(obj);b.setCursor(Qt.CursorShape.PointingHandCursor);b.setToolTip(tip);b.setFixedSize(34,30)
+        if icon_path and os.path.isfile(icon_path):b.setIcon(QIcon(icon_path));b.setIconSize(QSize(16,16));b.setText("")
+        else:b.setText(text)
+        return b
+    def _set_btn_icon(self,b,path,text):
+        if path and os.path.isfile(path):b.setIcon(QIcon(path));b.setIconSize(QSize(16,16));b.setText("")
+        else:b.setIcon(QIcon());b.setText(text)
+    def _toggle_max(self):
+        if self.owner.isMaximized():self.owner.showNormal()
+        else:self.owner.showMaximized()
+        self.sync_state()
+    def sync_state(self):
+        try:
+            if self.owner.isMaximized():
+                self._set_btn_icon(self.btn_max,_abs("Assets","maximize.png"),"[]");self.btn_max.setToolTip("Restore")
+            else:
+                self._set_btn_icon(self.btn_max,_abs("Assets","window.png"),"[]");self.btn_max.setToolTip("Maximize")
+        except Exception:pass
+    def mouseDoubleClickEvent(self,e):
+        if e.button()==Qt.MouseButton.LeftButton:self._toggle_max();e.accept();return
+        try:super().mouseDoubleClickEvent(e)
+        except Exception:pass
+    def mousePressEvent(self,e):
+        if e.button()==Qt.MouseButton.LeftButton:
+            self._drag_pos=e.globalPosition().toPoint()-self.owner.frameGeometry().topLeft();e.accept();return
+        try:super().mousePressEvent(e)
+        except Exception:pass
+    def mouseMoveEvent(self,e):
+        if self._drag_pos is not None and e.buttons()&Qt.MouseButton.LeftButton:
+            if self.owner.isMaximized():
+                ratio=e.position().x()/max(1,self.width())
+                self.owner.showNormal()
+                geo=self.owner.frameGeometry()
+                self.owner.move(e.globalPosition().toPoint().x()-int(geo.width()*ratio),max(0,e.globalPosition().toPoint().y()-20))
+                self._drag_pos=e.globalPosition().toPoint()-self.owner.frameGeometry().topLeft()
+            self.owner.move(e.globalPosition().toPoint()-self._drag_pos);e.accept();return
+        try:super().mouseMoveEvent(e)
+        except Exception:pass
+    def mouseReleaseEvent(self,e):
+        self._drag_pos=None
+        try:super().mouseReleaseEvent(e)
+        except Exception:pass
+def _apply_control_sizing(root):
+    try:
+        for b in root.findChildren((QToolButton,QPushButton)):
+            if b.objectName() in ("BottomNavBtn","WindowControlBtn","WindowCloseBtn","WindowShrinkBtn","MiniQuickBtn"):continue
+            try:b.setFixedHeight(38)
+            except Exception:pass
+        for w in root.findChildren((QLineEdit,QComboBox,QSpinBox)):
+            if not w.objectName():continue
+            try:w.setFixedHeight(38)
+            except Exception:pass
+        for w in root.findChildren((QTextEdit,QPlainTextEdit,QTextBrowser)):
+            name=w.objectName()
+            if not name:continue
+            if name=="CmdBoxCommand":continue
+            try:w.setMinimumWidth(260)
+            except Exception:pass
+            try:
+                if name in ("NoteArea","NoteNavDisplay","TargetJsonEdit","LOYATerminal"):w.setMinimumHeight(180)
+                elif "Command" in name or "Cmd" in name:w.setMinimumHeight(110)
+            except Exception:pass
+        for w in root.findChildren((QLineEdit,QComboBox)):
+            name=w.objectName()
+            if not name:continue
+            try:
+                if "PerPage" in name:w.setMinimumWidth(88);w.setMaximumWidth(100)
+                elif name in ("TargetStatus",):w.setMinimumWidth(120);w.setMaximumWidth(150)
+                elif "Search" in name or name=="AIPathInput":w.setMinimumWidth(260)
+                elif "Filter" in name:w.setMinimumWidth(220)
+                elif "Description" in name or "Tags" in name or "Program" in name:w.setMinimumWidth(240)
+                elif "Category" in name or "SubCategory" in name or name in ("NoteGroup","CmdNoteName","LOYASessionCombo"):w.setMinimumWidth(170)
+                elif "Name" in name or "Title" in name:w.setMinimumWidth(220)
+                elif "Field" in name or "KeyInput" in name:w.setMinimumWidth(160)
+            except Exception:pass
+    except Exception:pass
 class MainWindow(QMainWindow):
     def __init__(self,startup_report=None):
         super().__init__()
         self._startup_report=startup_report
         self.setObjectName("MainWindow")
         self.setWindowTitle(f"{APP_NAME} v{_app_version()}")
+        self.setWindowFlags(self.windowFlags()|Qt.WindowType.FramelessWindowHint)
         g=QApplication.primaryScreen().availableGeometry()
         min_w=min(980,max(640,int(g.width()*0.6)))
         min_h=min(620,max(420,int(g.height()*0.6)))
@@ -247,15 +347,14 @@ class MainWindow(QMainWindow):
         compact=(g.width()<1100 or g.height()<700)
         pad=10 if compact else 14
         gap=8 if compact else 12
-        h=QHBoxLayout(self.root);h.setContentsMargins(pad,pad,pad,pad);h.setSpacing(gap)
-        self.sidebar=SideBar(self.on_nav)
+        v=QVBoxLayout(self.root);v.setContentsMargins(pad,pad,pad,pad);v.setSpacing(gap)
+        self.title_bar=AppTitleBar(self,self.root)
         self.content=QFrame();self.content.setObjectName("ContentFrame")
         ch=QVBoxLayout(self.content);ch.setContentsMargins(0,0,0,0);ch.setSpacing(0)
         self.stack=QStackedWidget();self.stack.setObjectName("Stack")
         ch.addWidget(self.stack)
-        h.addWidget(self.sidebar);h.addWidget(self.content,1)
-        if compact:self.sidebar.set_expanded(False,instant=True)
-        self.page_chat=self._build_chat()
+        self.nav=BottomNav(self.on_nav)
+        v.addWidget(self.title_bar,0);v.addWidget(self.content,1);v.addWidget(self.nav,0,Qt.AlignmentFlag.AlignHCenter)
         self.page_notes=self._build_notes()
         self.page_commands=self._build_commands()
         self.page_targets=self._build_targets()
@@ -263,22 +362,31 @@ class MainWindow(QMainWindow):
         self._settings_loaded=False
         self.page_settings=PlaceholderPage("Settings","Loading settings...")
         self._mini_window=None
-        self._mini_pending=False
+        self.size_grip=QSizeGrip(self.root);self.size_grip.setObjectName("WindowSizeGrip");self.size_grip.setFixedSize(18,18);self.size_grip.raise_()
         self._wire_live_db_refresh()
         self._start_log_cleanup()
         self._start_auto_backup()
-        self.stack.addWidget(self.page_chat)
         self.stack.addWidget(self.page_notes)
         self.stack.addWidget(self.page_commands)
         self.stack.addWidget(self.page_targets)
         self.stack.addWidget(self.page_searchcopy)
         self.stack.addWidget(self.page_settings)
-        self.on_nav("chat")
+        _apply_control_sizing(self)
+        self.on_nav("notes")
         QTimer.singleShot(0,self._show_startup_notice)
         _log("[+]",f"MainWindow ready")
-    def _build_chat(self):
-        w=_load_widget(_abs("Cores","LOYA_Chat","LOYA_Chat.py"),"Widget")
-        return w if w else PlaceholderPage("LOYA","Coming soon...")
+    def resizeEvent(self,e):
+        try:self.title_bar.sync_state()
+        except Exception:pass
+        try:self.size_grip.move(max(0,self.root.width()-22),max(0,self.root.height()-22));self.size_grip.raise_()
+        except Exception:pass
+        try:super().resizeEvent(e)
+        except Exception:pass
+    def changeEvent(self,e):
+        try:self.title_bar.sync_state()
+        except Exception:pass
+        try:super().changeEvent(e)
+        except Exception:pass
     def _build_notes(self):
         w=_load_widget(_abs("Cores","Note.py"),"Widget")
         return w if w else PlaceholderPage("Notes","Coming soon...")
@@ -315,14 +423,13 @@ class MainWindow(QMainWindow):
         else:
             self.stack.addWidget(new)
         self._settings_loaded=True
+        _apply_control_sizing(new)
     def on_nav(self,key):
         if self._mini_window and self._mini_window.isVisible():
             try:self._mini_window.hide()
             except:pass
-        try:self.show()
-        except:pass
-        self.sidebar.select(key)
-        m={"chat":0,"notes":1,"commands":2,"targets":3,"searchcopy":4,"settings":5}
+        self.nav.select(key)
+        m={"notes":0,"commands":1,"targets":2,"searchcopy":3,"settings":4}
         if key=="settings":
             self._ensure_settings_loaded()
         self.stack.setCurrentIndex(m.get(key,0))
@@ -332,26 +439,9 @@ class MainWindow(QMainWindow):
                 if callable(hook):hook()
             except Exception:
                 pass
+        _apply_control_sizing(self)
+        QTimer.singleShot(0,lambda:_apply_control_sizing(self))
         _log("[*]",f"Nav: {key}")
-    def changeEvent(self,e):
-        try:
-            if self.isMinimized():
-                if not getattr(self,"_mini_pending",False):
-                    self._mini_pending=True
-                    QTimer.singleShot(0,self._open_mini_from_minimize)
-        except Exception:
-            pass
-        try:super().changeEvent(e)
-        except Exception:pass
-    def _open_mini_from_minimize(self):
-        self._mini_pending=False
-        if self._mini_window and self._mini_window.isVisible():
-            try:self._mini_window.raise_();self._mini_window.activateWindow()
-            except Exception:pass
-            return
-        try:self.setWindowState(self.windowState()&~Qt.WindowState.WindowMinimized)
-        except Exception:pass
-        self.open_mini()
     def open_mini(self):
         if self._mini_window is None:
             p=_abs("Cores","MiniWindow.py")
@@ -360,7 +450,7 @@ class MainWindow(QMainWindow):
                     spec=importlib.util.spec_from_file_location("mini_window",p)
                     mod=importlib.util.module_from_spec(spec);spec.loader.exec_module(mod)
                     cls=getattr(mod,"MiniWindow",None)
-                    if cls:self._mini_window=cls(owner=self)
+                    if cls:self._mini_window=cls(owner=self);_apply_control_sizing(self._mini_window)
                 except Exception as e:
                     _log("[!]",f"MiniWindow load error: {p} ({e})")
         if not self._mini_window:

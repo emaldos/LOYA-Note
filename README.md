@@ -1,77 +1,70 @@
-# LOYA Note v4.0.1
+# LOYA Note v5.0.0
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/issues)
-LOYA Note is a local desktop app for notes, commands, targets, search, backups, and a terminal-style assistant named LOYA.
-Version 4 adds grouped notes, safer updates, rollback and recovery tools, recycle bin support, import preview, diagnostics, and stronger search flows.
+LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, and update recovery.
+Version 5 starts on Notes, uses the custom LOYA title bar, and keeps the removed LOYA Chat module out of the main and mini navigation.
 ## Requirements
 - Python `>=3.10`
 - Packages are installed automatically from [`Requirements.json`](Requirements.json)
+- Runtime packages: PyQt6 and cryptography
 - Windows: Qt 6 requires Windows 10 version 1809 or later
 - Windows: Microsoft Visual C++ Redistributable x64 should be installed for PyQt6 runtime support
 ## Quick Start
-- Windows:
+Windows:
 ```powershell
 python RunNote.py
 ```
-- Linux:
+Linux:
 ```bash
 python3 RunNote.py
 ```
-- The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment, installs packages, validates the runtime, and starts the app.
+The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment, installs packages, validates the runtime, and starts the app.
 ## Main Areas
-### LOYA Terminal
-- Terminal-style assistant with command history, tab completion, saved searches, and recent searches
-- Can open pages, search notes and commands, manage targets, and run updater commands
-- Update commands:
-  - `update`
-  - `update check`
-  - `update now`
-  - `update version`
-  - `update logs`
-  - `update rollback`
 ### Notes
 - Rich text notes with embedded command blocks
+- Command blocks support click-to-copy from the note viewer
 - Stable note opening through `note_id`
-- Optional note groups
-- Navigate tree with folded groups and right-click create actions
+- Optional note groups with a folded Navigate tree
 - Group Manager for rename, move, ungroup, and delete-empty-group actions
 ### Commands
-- Standalone commands and note-linked commands
-- Related-note linking, previews, and grouped search results
+- Standalone commands and commands linked from notes
+- Right-click actions are focused on `Open Related Note` and `Copy Command`
+- Command Info shows command details, related note usage, metadata, and the full command
+- Editing a note-linked command warns when it is used in notes and updates the related notes after save
+### Snippets
+- Compact command table matching the Mini Window Commands view
+- Search, Favorites, and Sort By controls
+- Favorites can be sorted first, and commands can be copied quickly
+- Related-note opening is available when a command belongs to a note
 ### Targets
 - Reusable placeholders such as `{IP}` and `{URL}`
-- Shared across LOYA, Search, and Mini Window
-### Search
-- Group-aware note and command search
-- Saved searches and recent searches
-- Result previews with note, command, group, tags, and related metadata
+- Target values are shared across Notes, Commands, Search, and Mini Window
+### Mini Window
+- Small command, target, and Quick Space workspace
+- Commands use the same related-note picker and copy flow as the main app
+- Quick Space supports autosave, manual save, and theme-matched controls
 ### Settings
-- Security, Backup, Import & Export, Tags, Update, Recycle Bin, and Diagnostics pages
-## v4 Highlights
-### Update, Downgrade, and Recovery
+- Security, Backup, Import & Export, Tags, Update, and Recycle Bin pages
+## Import & Export
+- Export All creates a full data `.zip`
+- Export supports Notes, Commands, Targets, and Target Values in the supported file formats
+- Import uses a preview flow before writing data
+- Template provides human templates
+- AI Prompt Template provides prompts that explain LOYA Note structures for AI-assisted conversion
+## Update, Downgrade, and Recovery
 - Installed version is read from [`CurrentVersion.info`](Cores/Update/CurrentVersion.info)
 - Updater state is stored in `Cores/Update/state.json`
-- Only the official repository is accepted as an update source:
-  - `https://github.com/emaldos/LOYA-Note`
+- Only the official repository is accepted as an update source: `https://github.com/emaldos/LOYA-Note`
 - Update checks validate repo owner, repo name, semantic version, and package source before install
-- Updates can start from:
-  - `Settings > Update`
-  - LOYA terminal update commands
-- Before apply, LOYA creates:
-  - a data backup in `Backups/`
-  - a code snapshot in `Cores/Update/OldVersions/`
+- Updates can start from `Settings > Update`
+- Before apply, LOYA creates a data backup in `Backups/` and a code snapshot in `Cores/Update/OldVersions/`
 - Only the last 2 code snapshots are kept for rollback
-- If startup or update apply fails, recovery mode can open from the launcher, fatal startup path, or LOYA `update rollback`
-### Recycle Bin
+- If startup or update apply fails, recovery mode can open from the launcher or fatal startup path
+## Recycle Bin
 - Deleted notes, standalone commands, and targets are soft-deleted first
 - Recycle-bin retention is 30 days before purge
-### Import Preview
-- Imports for notes, commands, targets, and target values run a dry-run preview before write
-- Duplicate rows can be skipped or replaced before apply
-### Diagnostics
-- Settings > Diagnostics shows version, database status, update state, recycle-bin status, backups, launch state, and log shortcuts
 ## Release Publishing
 The in-app updater reads the latest GitHub release, not just the latest pushed commit.
 To publish a new version:
@@ -93,7 +86,7 @@ Recommended release asset contents:
 - `Requirements.json`
 - `README.md`
 - `LICENSE`
-Do not include local runtime folders in the release asset:
+Do not include local runtime or retired folders in the release asset:
 - `Data/`
 - `Logs/`
 - `Backups/`
@@ -101,45 +94,21 @@ Do not include local runtime folders in the release asset:
 - `.venv_linux/`
 - `Cores/Update/OldVersions/`
 - `Cores/Update/state.json`
-## LOYA Command Summary
-- `help` or `help <command>`
-- `clear`
-- `history`
-- `clear history`
-- `reset`
-- `open notes|commands|targets|settings`
-- `use target "Name"`
-- `add target "Name"`
-- `select target "Name" { KEY="VALUE" }`
-- `add KEY="VALUE"`
-- `add element KEY PRIORITY`
-- `search in <notes|commands|targets|targets value> for <filters>`
-- `more`
-- `show <id>`
-- `save search <name>`
-- `run search <name>`
-- `update`
-- `update check`
-- `update now`
-- `update version`
-- `update logs`
-- `update rollback`
+- `Cores/LOYA_Chat/`
 ## Runtime Paths
 - Database: `Data/Note_LOYA_V1.db`
 - Notes metadata: `Data/notes_meta.json`
 - Settings: `Data/settings.json`
 - Targets: `Data/Targets.json`
 - Target keys: `Data/target_values.json`
-- LOYA history: `Data/LOYA_Chat_history.json`
-- LOYA saved searches: `Data/LOYA_Chat_saved_searches.json`
-- LOYA recent searches: `Data/LOYA_Chat_recent_searches.json`
+- Quick Space: `Data/QuicSpace.json`
 - Backups: `Backups/`
 - Logs: `Logs/`
 - Update runtime: `Cores/Update/`
 - Code snapshots: `Cores/Update/OldVersions/`
 ## Versioning
 - Visible app version, launcher version, updater version, and README version should stay aligned
-- This build is `4.0.1`
+- This build is `5.0.0`
 ## Links
 - Repository: https://github.com/emaldos/LOYA-Note
 - Issues: https://github.com/emaldos/LOYA-Note/issues

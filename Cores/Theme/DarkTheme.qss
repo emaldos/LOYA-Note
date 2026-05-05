@@ -3,6 +3,9 @@ QMainWindow#MainWindow{background:transparent}
 QWidget#Root{background:#121212;border-radius:18px}
 QFrame#ContentFrame{background:#1b1b1b;border-radius:18px}
 QFrame#SideBar{background:#161616;border-radius:18px}
+QFrame#BottomNav{background:#161616;border:1px solid #242424;border-radius:18px}
+QFrame#BottomNavHandle{background:#2e7bff;border:0;border-radius:2px}
+QFrame#BottomNavRow{background:transparent;border:0}
 QStackedWidget#Stack{background:transparent}
 QWidget#Page{background:transparent}
 QLabel#PageTitle{font-size:22px;font-weight:800;color:#f2f2f2;margin:0;padding:0}
@@ -15,6 +18,9 @@ QToolButton#AIPathBtn:hover{background:#262626}
 QToolButton{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:14px;padding:10px 12px;text-align:left}
 QToolButton:hover{background:#262626}
 QToolButton:checked{background:#2b2b2b;border:1px solid #3a3a3a}
+QToolButton#BottomNavBtn{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:12px;padding:7px 4px;text-align:center;font-weight:900}
+QToolButton#BottomNavBtn:hover{background:#262626;border:1px solid #3a3a3a}
+QToolButton#BottomNavBtn:checked{background:#202a3a;border:2px solid #0069ff;color:#ffffff}
 QToolButton#SideToggle{background:#1f1f1f;border:1px solid #2f2f2f;border-radius:14px;font-size:16px}
 QToolButton#SideToggle:hover{background:#2a2a2a}
 QToolButton#HomeAddBtn{background:#232323;border:1px solid #343434;border-radius:10px;padding:4px 10px;margin:0;font-weight:800;min-height:30px;text-align:left}
@@ -135,6 +141,12 @@ QLineEdit#TargetName,QLineEdit#TargetField{background:#1e1e1e;border:1px solid #
 QLineEdit#TargetName:focus,QLineEdit#TargetField:focus{border:1px solid #3a3a3a;background:#202020}
 QToolButton#TargetMiniBtn{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:10px;min-height:30px;padding:0 10px;font-weight:900}
 QToolButton#TargetMiniBtn:hover{background:#262626}
+QFrame#IEActionRow{background:transparent;border:1px solid #4d78aa88;border-radius:10px}
+QFrame#IEActionRow:hover{background:#73101b2f;border:1px solid #808ec5ff}
+QLabel#IEActionTitle{font-size:13px;font-weight:900;color:#f3f6ff}
+QLabel#IEActionMeta{font-size:11px;color:#b8b8b8}
+QLabel#IEStatus{font-size:12px;color:#b8b8b8;padding:0 6px}
+QLabel#IEInfo{font-size:12px;color:#d9e8ff;background:#73101b2f;border:1px solid #4d78aa88;border-radius:10px;padding:8px 10px}
 QToolButton#TargetSaveBtn{background:#232323;border:1px solid #343434;border-radius:14px;padding:10px 16px;font-weight:800}
 QToolButton#TargetSaveBtn:hover{background:#2b2b2b}
 QToolButton#TargetCancelBtn{background:#1e1e1e;border:1px solid #2b2b2b;border-radius:14px;padding:10px 16px;font-weight:800}
@@ -285,3 +297,199 @@ QFrame#MiniStatusDot{background:#2ecc71;border-radius:5px;min-width:10px;min-hei
 QFrame#MiniStatusDot[active="false"]{background:#4a4a4a}
 QLabel#MiniStatusText{color:#bdbdbd;font-weight:800}
 QLabel#MiniStatusTarget{color:#f2f2f2;font-weight:800}
+QFrame#MiniQuickFrame{background:transparent;border:0}
+QFrame#MiniQuickSearch,QFrame#MiniQuickToolbar{background:transparent;border:0}
+QTextEdit#MiniQuickText{background:#33101d33;border:1px solid #668ab8ff;border-radius:12px;color:#ffffff;padding:8px;selection-background-color:#662e7bff;selection-color:#ffffff}
+QTextEdit#MiniQuickText:hover{background:#33101d33;border:1px solid #8ab5ffff;color:#ffffff}
+QTextEdit#MiniQuickText:focus{background:#33101d33;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#MiniQuickBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:10px;color:#ffffff;font-weight:900;min-width:28px;max-width:32px;min-height:24px;max-height:28px;padding:0;text-align:center}
+QToolButton#MiniQuickBtn:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#MiniQuickBtn:checked{background:#662e7bff;border:1px solid #99c7ffff;color:#ffffff}
+QFrame#MiniQuickSaveMark{background:transparent;border:1px solid transparent;border-radius:5px;min-width:10px;max-width:10px;min-height:10px;max-height:10px}
+QFrame#MiniQuickSaveMark[active="true"]{background:#2ecc71;border:1px solid #99c7ffff}
+QLabel#MiniQuickCount{color:#d9e8ff;font-weight:800;min-width:42px}
+*{color:#eaf3ff}
+QWidget#Root{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #050914,stop:0.48 #0b1833,stop:1 #102a54);border-radius:16px}
+QFrame#ContentFrame,QFrame#SideBar,QFrame#HomeTableFrame,QFrame#TagsBox,QFrame#TagChip,QFrame#RecentTagChip,QFrame#SplitCatsFrame,QFrame#SplitSubsFrame,QFrame#CardItem,QFrame#CardDetail,QFrame#TargetTableFrame,QFrame#TargetFormFrame,QFrame#TargetKeysFrame,QFrame#TargetJsonFrame,QFrame#TargetDialogFrame,QFrame#Toast,QFrame#NoteAddTableFrame,QFrame#NoteNavLeft,QFrame#NoteNavDisplayFrame,QFrame#CmdCommandFrame,QFrame#LOYAInputFrame,QFrame#LOYATerminalFrame,QFrame#LOYABubbleUser,QFrame#LOYABubbleAI,QFrame#LOYATypingBubble,QFrame#LOYACard,QFrame#MiniWindowFrame{background:#73101b2f;border:1px solid #4d78aaff;border-radius:16px}
+QFrame#ContentFrame:hover,QFrame#CardItem:hover,QFrame#LOYACard:hover{background:#8a122b4a;border:1px solid #808ec5ff}
+QLabel,QLabel#PageTitle,QLabel#SectionTitle,QLabel#CardTitle,QLabel#TargetFormTitle,QLabel#NoteNavTitle,QLabel#LOYACardTitle,QLabel#MiniTitle{color:#ffffff}
+QLabel#PageSubTitle,QLabel#CardMeta,QLabel#HomePageLabel,QLabel#SplitBarTitle,QLabel#NoteAddPage,QLabel#MiniStatusText,QLabel#MiniStatusTarget,QLabel#LOYACardMeta,QLabel#LOYACardReason,QLabel#LOYACardList,QLabel#LOYACardCmd,QLabel#LOYACardSnippet,QLabel#ToastMsg{color:#d9e8ff}
+QToolButton,QPushButton,QMessageBox QPushButton{background:#59152a46;border:1px solid #667fbfff;border-radius:14px;color:#ffffff}
+QToolButton:hover,QPushButton:hover,QMessageBox QPushButton:hover{background:#80204a73;border:1px solid #8ab5ffff;color:#ffffff}
+QToolButton:pressed,QPushButton:pressed{background:#99306399;border:1px solid #99c7ffff}
+QToolButton:checked{background:#662e7bff;border:1px solid #99c7ffff;color:#ffffff}
+QLineEdit,QTextEdit,QPlainTextEdit,QComboBox,QSpinBox{background:#33101d33;border:1px solid #668ab8ff;border-radius:12px;color:#ffffff;selection-background-color:#662e7bff;selection-color:#ffffff}
+QLineEdit:focus,QTextEdit:focus,QPlainTextEdit:focus,QComboBox:focus,QComboBox:on,QSpinBox:focus{background:#4d132b4a;border:1px solid #99c7ffff;color:#ffffff}
+QComboBox::drop-down{border:0;background:transparent}
+QComboBox QAbstractItemView,QMenu{background:#e60a1328;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;selection-background-color:#662e7bff}
+QMenu::item:selected{background:#662e7bff;color:#ffffff}
+QTabBar::tab{background:#59152a46;border:1px solid #667fbfff;border-bottom:0;border-top-left-radius:12px;border-top-right-radius:12px;color:#ffffff}
+QTabBar::tab:hover{background:#80204a73;border:1px solid #8ab5ffff;border-bottom:0}
+QTabBar::tab:selected{background:#662e7bff;border:1px solid #99c7ffff;border-bottom:0;color:#ffffff}
+QHeaderView::section{background:#59152a46;border:0;border-bottom:1px solid #4d78aaff;border-right:1px solid #4d78aaff;color:#ffffff}
+QTableWidget{background:transparent;border:0;gridline-color:#4d78aaff;selection-background-color:#662e7bff;selection-color:#ffffff;color:#ffffff}
+QTableWidget::item:selected{background:#662e7bff;color:#ffffff}
+QTableWidget::item:hover{background:#33183a66;color:#ffffff}
+QListWidget::item:hover{background:#33183a66;color:#ffffff}
+QListWidget::item:selected{background:#662e7bff;color:#ffffff}
+QScrollBar::handle:vertical,QScrollBar::handle:horizontal{background:#663b82d6;border-radius:5px}
+QScrollBar::handle:vertical:hover,QScrollBar::handle:horizontal:hover{background:#992e7bff}
+QDialog,QMessageBox{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #050914,stop:0.48 #0b1833,stop:1 #102a54);border:1px solid #4d78aaff;border-radius:16px;color:#ffffff}
+QFrame#BottomNav{background:#8a0e1d33;border:1px solid #802e7bff;border-radius:16px;margin:0}
+QFrame#BottomNavHandle{background:#cc2e7bff;border:0;border-radius:2px}
+QFrame#BottomNavRow{background:transparent;border:0}
+QToolButton#BottomNavBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:14px;color:#ffffff;text-align:center;font-weight:900}
+QToolButton#BottomNavBtn:hover{background:#80204a73;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#BottomNavBtn:checked{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QFrame#ContentFrame:hover,QFrame#HomeTableFrame:hover,QFrame#TagsBox:hover,QFrame#TagChip:hover,QFrame#RecentTagChip:hover,QFrame#SplitCatsFrame:hover,QFrame#SplitSubsFrame:hover,QFrame#CardItem:hover,QFrame#CardDetail:hover,QFrame#TargetTableFrame:hover,QFrame#TargetFormFrame:hover,QFrame#TargetKeysFrame:hover,QFrame#TargetJsonFrame:hover,QFrame#TargetDialogFrame:hover,QFrame#Toast:hover,QFrame#NoteAddTableFrame:hover,QFrame#NoteNavLeft:hover,QFrame#NoteNavDisplayFrame:hover,QFrame#CmdCommandFrame:hover,QFrame#LOYAInputFrame:hover,QFrame#LOYATerminalFrame:hover,QFrame#LOYABubbleUser:hover,QFrame#LOYABubbleAI:hover,QFrame#LOYATypingBubble:hover,QFrame#LOYACard:hover,QFrame#MiniWindowFrame:hover{background:#73101b2f;border:1px solid #4d78aaff;border-radius:16px}
+QTableWidget::item:hover,QListWidget::item:hover,QTableWidget#HomeTable::item:hover,QTableWidget#TargetTable::item:hover,QTableWidget#TargetKeysTable::item:hover,QTableWidget#NoteAddTable::item:hover,QTableWidget#MiniCmdTable::item:hover,QListWidget#SplitCatsList::item:hover,QListWidget#SplitSubsList::item:hover{background:transparent;color:#eaf3ff}
+QToolButton,QPushButton,QMessageBox QPushButton,QToolButton#AIPathBtn,QToolButton#BottomNavBtn,QToolButton#CardCopyBtn,QToolButton#CardsBackBtn,QToolButton#CardsCrumbBtn,QToolButton#CmdCancelBtn,QToolButton#CmdSaveBtn,QToolButton#FmtBold,QToolButton#FmtH1,QToolButton#FmtH2,QToolButton#FmtH3,QToolButton#FmtItalic,QToolButton#FmtList,QToolButton#FmtTable,QToolButton#FmtUnderline,QToolButton#HomeAddBtn,QToolButton#HomePageNext,QToolButton#HomePagePrev,QToolButton#LOYACardBtn,QToolButton#LOYASendBtn,QToolButton#LOYASessionBtn,QToolButton#LOYAShowMoreBtn,QToolButton#MiniControlBtn,QToolButton#MiniFilterBtn,QToolButton#MiniPinBtn,QToolButton#NoteAddCancelBtn,QToolButton#NoteAddCmd,QToolButton#NoteAddLink,QToolButton#NoteAddNext,QToolButton#NoteAddPrev,QToolButton#NoteAddRefresh,QToolButton#NoteAddSaveBtn,QToolButton#NoteClear,QToolButton#NoteCreateBtn,QToolButton#NoteNavChildBtn,QToolButton#NoteNavGroupBtn,QToolButton#NoteSave,QToolButton#RecentTagBtn,QToolButton#RecentTagXBtn,QToolButton#SideToggle,QToolButton#TableCancel,QToolButton#TableOk,QToolButton#TagAddBtn,QToolButton#TagXBtn,QToolButton#TargetAddBtn,QToolButton#TargetCancelBtn,QToolButton#TargetMiniBtn,QToolButton#TargetSaveBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:14px;color:#ffffff}
+QToolButton:hover,QPushButton:hover,QMessageBox QPushButton:hover,QToolButton#AIPathBtn:hover,QToolButton#BottomNavBtn:hover,QToolButton#CardCopyBtn:hover,QToolButton#CardsBackBtn:hover,QToolButton#CardsCrumbBtn:hover,QToolButton#CmdCancelBtn:hover,QToolButton#CmdSaveBtn:hover,QToolButton#FmtBold:hover,QToolButton#FmtH1:hover,QToolButton#FmtH2:hover,QToolButton#FmtH3:hover,QToolButton#FmtItalic:hover,QToolButton#FmtList:hover,QToolButton#FmtTable:hover,QToolButton#FmtUnderline:hover,QToolButton#HomeAddBtn:hover,QToolButton#HomePageNext:hover,QToolButton#HomePagePrev:hover,QToolButton#LOYACardBtn:hover,QToolButton#LOYASendBtn:hover,QToolButton#LOYASessionBtn:hover,QToolButton#LOYAShowMoreBtn:hover,QToolButton#MiniControlBtn:hover,QToolButton#MiniFilterBtn:hover,QToolButton#MiniPinBtn:hover,QToolButton#NoteAddCancelBtn:hover,QToolButton#NoteAddCmd:hover,QToolButton#NoteAddLink:hover,QToolButton#NoteAddNext:hover,QToolButton#NoteAddPrev:hover,QToolButton#NoteAddRefresh:hover,QToolButton#NoteAddSaveBtn:hover,QToolButton#NoteClear:hover,QToolButton#NoteCreateBtn:hover,QToolButton#NoteNavChildBtn:hover,QToolButton#NoteNavGroupBtn:hover,QToolButton#NoteSave:hover,QToolButton#RecentTagBtn:hover,QToolButton#RecentTagXBtn:hover,QToolButton#SideToggle:hover,QToolButton#TableCancel:hover,QToolButton#TableOk:hover,QToolButton#TagAddBtn:hover,QToolButton#TagXBtn:hover,QToolButton#TargetAddBtn:hover,QToolButton#TargetCancelBtn:hover,QToolButton#TargetMiniBtn:hover,QToolButton#TargetSaveBtn:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton:pressed,QPushButton:pressed,QToolButton#BottomNavBtn:pressed{background:#662e7bff;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton:checked,QToolButton#BottomNavBtn:checked,QToolButton#MiniPinBtn:checked,QToolButton#MiniFilterBtn:checked,QToolButton#NoteNavChildBtn:checked,QToolButton#FmtBold:checked,QToolButton#FmtH1:checked,QToolButton#FmtH2:checked,QToolButton#FmtH3:checked,QToolButton#FmtItalic:checked,QToolButton#FmtUnderline:checked{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QLineEdit,QTextEdit,QPlainTextEdit,QTextBrowser,QComboBox,QSpinBox,QLineEdit#AIPathInput,QLineEdit#HomeSearch,QLineEdit#NoteTitle,QLineEdit#TagInput,QLineEdit#NoteDescription,QLineEdit#TargetSearch,QLineEdit#TargetKeyInput,QLineEdit#TargetName,QLineEdit#TargetField,QLineEdit#NoteName,QLineEdit#NoteAddSearch,QLineEdit#CmdDescription,QLineEdit#CmdBoxNoteTitle,QLineEdit#CmdBoxCategory,QLineEdit#CmdBoxSubCategory,QLineEdit#CmdBoxTags,QLineEdit#CmdBoxProgram,QLineEdit#CmdBoxDescription,QLineEdit#LOYAInput,QLineEdit#MiniSearchInput,QTextEdit#NoteCommand,QTextEdit#CardDetailCmd,QTextEdit#NoteArea,QTextEdit#NoteNavDisplay,QTextEdit#CmdCommand,QTextEdit#CmdBoxCommand,QPlainTextEdit#TargetJsonEdit,QPlainTextEdit#LOYATerminal,QComboBox#HomePerPage,QComboBox#NoteCategory,QComboBox#NoteSubCategory,QComboBox#TargetStatus,QComboBox#NoteGroup,QComboBox#NoteAddPerPage,QComboBox#CmdNoteName,QComboBox#CmdCategory,QComboBox#CmdSubCategory,QComboBox#LOYASessionCombo{background:#33101d33;border:1px solid #668ab8ff;border-radius:12px;color:#ffffff;selection-background-color:#662e7bff;selection-color:#ffffff}
+QLineEdit:hover,QTextEdit:hover,QPlainTextEdit:hover,QTextBrowser:hover,QComboBox:hover,QSpinBox:hover,QLineEdit#AIPathInput:hover,QLineEdit#HomeSearch:hover,QLineEdit#NoteTitle:hover,QLineEdit#TagInput:hover,QLineEdit#NoteDescription:hover,QLineEdit#TargetSearch:hover,QLineEdit#TargetKeyInput:hover,QLineEdit#TargetName:hover,QLineEdit#TargetField:hover,QLineEdit#NoteName:hover,QLineEdit#NoteAddSearch:hover,QLineEdit#CmdDescription:hover,QLineEdit#CmdBoxNoteTitle:hover,QLineEdit#CmdBoxCategory:hover,QLineEdit#CmdBoxSubCategory:hover,QLineEdit#CmdBoxTags:hover,QLineEdit#CmdBoxProgram:hover,QLineEdit#CmdBoxDescription:hover,QLineEdit#LOYAInput:hover,QLineEdit#MiniSearchInput:hover,QTextEdit#NoteCommand:hover,QTextEdit#CardDetailCmd:hover,QTextEdit#NoteArea:hover,QTextEdit#NoteNavDisplay:hover,QTextEdit#CmdCommand:hover,QTextEdit#CmdBoxCommand:hover,QPlainTextEdit#TargetJsonEdit:hover,QPlainTextEdit#LOYATerminal:hover,QComboBox#HomePerPage:hover,QComboBox#NoteCategory:hover,QComboBox#NoteSubCategory:hover,QComboBox#TargetStatus:hover,QComboBox#NoteGroup:hover,QComboBox#NoteAddPerPage:hover,QComboBox#CmdNoteName:hover,QComboBox#CmdCategory:hover,QComboBox#CmdSubCategory:hover,QComboBox#LOYASessionCombo:hover{background:#33101d33;border:1px solid #8ab5ffff;color:#ffffff}
+QLineEdit:focus,QTextEdit:focus,QPlainTextEdit:focus,QTextBrowser:focus,QComboBox:focus,QComboBox:on,QSpinBox:focus,QLineEdit#AIPathInput:focus,QLineEdit#HomeSearch:focus,QLineEdit#NoteTitle:focus,QLineEdit#TagInput:focus,QLineEdit#NoteDescription:focus,QLineEdit#TargetSearch:focus,QLineEdit#TargetKeyInput:focus,QLineEdit#TargetName:focus,QLineEdit#TargetField:focus,QLineEdit#NoteName:focus,QLineEdit#NoteAddSearch:focus,QLineEdit#CmdDescription:focus,QLineEdit#CmdBoxNoteTitle:focus,QLineEdit#CmdBoxCategory:focus,QLineEdit#CmdBoxSubCategory:focus,QLineEdit#CmdBoxTags:focus,QLineEdit#CmdBoxProgram:focus,QLineEdit#CmdBoxDescription:focus,QLineEdit#LOYAInput:focus,QLineEdit#MiniSearchInput:focus,QTextEdit#NoteCommand:focus,QTextEdit#CardDetailCmd:focus,QTextEdit#NoteArea:focus,QTextEdit#NoteNavDisplay:focus,QTextEdit#CmdCommand:focus,QTextEdit#CmdBoxCommand:focus,QPlainTextEdit#TargetJsonEdit:focus,QPlainTextEdit#LOYATerminal:focus,QComboBox#HomePerPage:focus,QComboBox#NoteCategory:focus,QComboBox#NoteSubCategory:focus,QComboBox#TargetStatus:focus,QComboBox#NoteGroup:focus,QComboBox#NoteAddPerPage:focus,QComboBox#CmdNoteName:focus,QComboBox#CmdCategory:focus,QComboBox#CmdSubCategory:focus,QComboBox#LOYASessionCombo:focus{background:#33101d33;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton,QPushButton,QMessageBox QPushButton,QToolButton#AIPathBtn,QToolButton#CardCopyBtn,QToolButton#CardsBackBtn,QToolButton#CardsCrumbBtn,QToolButton#CmdCancelBtn,QToolButton#CmdSaveBtn,QToolButton#FmtBold,QToolButton#FmtH1,QToolButton#FmtH2,QToolButton#FmtH3,QToolButton#FmtItalic,QToolButton#FmtList,QToolButton#FmtTable,QToolButton#FmtUnderline,QToolButton#HomeAddBtn,QToolButton#HomePageNext,QToolButton#HomePagePrev,QToolButton#LOYACardBtn,QToolButton#LOYASendBtn,QToolButton#LOYASessionBtn,QToolButton#LOYAShowMoreBtn,QToolButton#MiniControlBtn,QToolButton#MiniFilterBtn,QToolButton#MiniPinBtn,QToolButton#NoteAddCancelBtn,QToolButton#NoteAddCmd,QToolButton#NoteAddLink,QToolButton#NoteAddNext,QToolButton#NoteAddPrev,QToolButton#NoteAddRefresh,QToolButton#NoteAddSaveBtn,QToolButton#NoteClear,QToolButton#NoteCreateBtn,QToolButton#NoteNavChildBtn,QToolButton#NoteNavGroupBtn,QToolButton#NoteSave,QToolButton#RecentTagBtn,QToolButton#RecentTagXBtn,QToolButton#SideToggle,QToolButton#TableCancel,QToolButton#TableOk,QToolButton#TagAddBtn,QToolButton#TagXBtn,QToolButton#TargetAddBtn,QToolButton#TargetCancelBtn,QToolButton#TargetMiniBtn,QToolButton#TargetSaveBtn{min-height:36px;max-height:36px;padding:0 14px}
+QToolButton#BottomNavBtn{min-width:76px;max-width:76px;min-height:46px;max-height:46px;padding:3px 2px 0 2px}
+QLineEdit,QComboBox,QSpinBox,QLineEdit#AIPathInput,QLineEdit#HomeSearch,QLineEdit#NoteTitle,QLineEdit#TagInput,QLineEdit#NoteDescription,QLineEdit#TargetSearch,QLineEdit#TargetKeyInput,QLineEdit#TargetName,QLineEdit#TargetField,QLineEdit#NoteName,QLineEdit#NoteAddSearch,QLineEdit#CmdDescription,QLineEdit#CmdBoxNoteTitle,QLineEdit#CmdBoxCategory,QLineEdit#CmdBoxSubCategory,QLineEdit#CmdBoxTags,QLineEdit#CmdBoxProgram,QLineEdit#CmdBoxDescription,QLineEdit#LOYAInput,QLineEdit#MiniSearchInput,QComboBox#HomePerPage,QComboBox#NoteCategory,QComboBox#NoteSubCategory,QComboBox#TargetStatus,QComboBox#NoteGroup,QComboBox#NoteAddPerPage,QComboBox#CmdNoteName,QComboBox#CmdCategory,QComboBox#CmdSubCategory,QComboBox#LOYASessionCombo{min-height:36px;max-height:36px;padding:0 12px}
+QComboBox{padding-right:30px}
+QLineEdit#HomeSearch,QLineEdit#TargetSearch,QLineEdit#NoteAddSearch,QLineEdit#MiniSearchInput,QLineEdit#AIPathInput{min-width:260px}
+QLineEdit#NoteName,QLineEdit#NoteTitle,QLineEdit#TargetName,QLineEdit#CmdBoxNoteTitle{min-width:220px}
+QLineEdit#NoteDescription,QLineEdit#CmdDescription,QLineEdit#CmdBoxDescription,QLineEdit#CmdBoxProgram,QLineEdit#CmdBoxTags,QLineEdit#TagInput{min-width:240px}
+QLineEdit#CmdBoxCategory,QLineEdit#CmdBoxSubCategory,QLineEdit#TargetField,QLineEdit#TargetKeyInput{min-width:160px}
+QComboBox#HomePerPage,QComboBox#NoteAddPerPage{min-width:88px;max-width:110px}
+QComboBox#NotesPageSize{min-width:66px;max-width:66px;padding:0 6px;padding-right:18px}
+QComboBox#NotesPageSize::drop-down{width:18px;border:0;background:transparent}
+QComboBox#CommandsPerPage{min-width:66px;max-width:66px;padding:0 6px;padding-right:18px}
+QComboBox#CommandsPerPage::drop-down{width:18px;border:0;background:transparent}
+QScrollArea#TargetFieldsScroll{background:transparent;border:0}
+QFrame#TargetFieldsWrap{background:transparent;border:0}
+QLabel#TargetFieldLabel{background:transparent;color:#d9e8ff;font-weight:800}
+QLineEdit#TargetFieldSearch,QLineEdit#TargetKeyFilter{background:#33101d33;border:1px solid #668ab8ff;border-radius:12px;color:#ffffff;selection-background-color:#662e7bff;selection-color:#ffffff;min-height:36px;max-height:36px;padding:0 12px}
+QLineEdit#TargetFieldSearch:focus,QLineEdit#TargetKeyFilter:focus{background:#33101d33;border:1px solid #99c7ffff;color:#ffffff}
+QComboBox#FmtFontSize{min-width:72px;max-width:72px;padding:0 6px;padding-right:18px}
+QComboBox#FmtFontSize::drop-down{width:18px;border:0;background:transparent}
+QComboBox#NoteGroup::drop-down,QComboBox#FmtFontSize::drop-down{subcontrol-origin:padding;subcontrol-position:top right;width:24px;border:0;background:#26172f66;border-top-right-radius:12px;border-bottom-right-radius:12px}
+QComboBox#NoteGroup::down-arrow,QComboBox#FmtFontSize::down-arrow{image:url(Assets/Expand.png);width:10px;height:10px}
+QToolButton#NoteAddCmd[editorTop="true"]{min-width:100px;max-width:100px}
+QToolButton#NoteAddLink[editorTop="true"]{min-width:66px;max-width:66px}
+QToolButton#NotePickCmd[editorTop="true"]{min-width:100px;max-width:100px}
+QToolButton#NoteSave[editorTop="true"]{min-width:44px;max-width:44px;padding:0}
+QToolButton#FmtBold,QToolButton#FmtItalic,QToolButton#FmtUnderline,QToolButton#FmtImage,QToolButton#FmtList,QToolButton#FmtTable{min-width:42px;max-width:42px;min-height:42px;max-height:42px;padding:0;text-align:center}
+QComboBox#TargetStatus{min-width:120px;max-width:150px}
+QComboBox#GroupShowFilter{min-width:260px;padding:0 12px;padding-right:30px}
+QComboBox#GroupShowFilter::drop-down{width:24px;border:0;background:#26172f66;border-top-right-radius:12px;border-bottom-right-radius:12px}
+QComboBox#GroupShowFilter::down-arrow{image:url(Assets/Expand.png);width:10px;height:10px}
+QComboBox#NoteCategory,QComboBox#NoteSubCategory,QComboBox#NoteGroup,QComboBox#CmdNoteName,QComboBox#CmdCategory,QComboBox#CmdSubCategory,QComboBox#LOYASessionCombo{min-width:170px}
+QTextEdit,QPlainTextEdit,QTextBrowser,QTextEdit#NoteCommand,QTextEdit#CardDetailCmd,QTextEdit#CmdCommand,QTextEdit#CmdBoxCommand,QPlainTextEdit#TargetJsonEdit,QPlainTextEdit#LOYATerminal,QTextEdit#NoteArea,QTextEdit#NoteNavDisplay{min-width:260px;border-radius:12px}
+QTextEdit#NoteCommand,QTextEdit#CardDetailCmd,QTextEdit#CmdCommand,QTextEdit#CmdBoxCommand{min-height:96px}
+QPlainTextEdit#TargetJsonEdit,QPlainTextEdit#LOYATerminal,QTextEdit#NoteArea,QTextEdit#NoteNavDisplay{min-height:180px}
+QFrame#NoteNavLeft{min-width:300px;max-width:300px}
+QFrame#NoteNavGroupFrame{background:#4d101b2f;border:1px solid #4d78aaff;border-radius:14px}
+QToolButton#NoteNavGroupBtn{background:transparent;border:0;border-radius:10px;color:#ffffff;text-align:left;font-weight:900;padding:0 8px}
+QToolButton#NoteNavGroupBtn:hover{background:transparent;border:0;color:#ffffff}
+QFrame#NoteNavChildFrame{background:#33152a46;border:1px solid #40667fbf;border-radius:12px}
+QFrame#NoteNavChildFrame:hover{background:#33152a46;border:1px solid #99c7ffff}
+QFrame#NoteNavChildFrame[checked="true"]{background:#662e7bff;border:2px solid #2e7bff}
+QLabel#NoteNavChildLabel{background:transparent;color:#eaf3ff;font-weight:800}
+QTableWidget::item:selected,QTableWidget#HomeTable::item:selected,QTableWidget#TargetTable::item:selected,QTableWidget#TargetKeysTable::item:selected,QTableWidget#NoteAddTable::item:selected,QTableWidget#MiniCmdTable::item:selected{background:#662e7bff;color:#ffffff;border:2px solid #2e7bff}
+QListWidget::item:selected,QListWidget#SplitCatsList::item:selected,QListWidget#SplitSubsList::item:selected{background:#662e7bff;color:#ffffff;border:2px solid #2e7bff}
+QComboBox QAbstractItemView::item:selected,QMenu::item:selected{background:#662e7bff;color:#ffffff;border:2px solid #2e7bff}
+QFrame#CmdInlineBox{background:qlineargradient(x1:0,y1:0,x2:1,y2:1,stop:0 #4d0c1f3a,stop:.52 #33101d33,stop:1 #33225d4d);border:1px solid #66a8ffff;border-radius:16px}
+QLabel#CmdBoxLabel{background:transparent;color:#b9dcff;font-weight:900;padding:0 4px}
+QLabel#CmdEditWarning{background:#5a142166;border:1px solid #ffb35caa;border-radius:12px;color:#ffe6c7;font-weight:900;padding:8px 12px}
+QLineEdit#CmdBoxNoteTitle,QLineEdit#CmdBoxCategory,QLineEdit#CmdBoxSubCategory,QLineEdit#CmdBoxTags,QLineEdit#CmdBoxDescription,QTextEdit#CmdBoxCommand{background:#33111f40;border:1px solid #667fbfff;border-radius:14px;color:#ffffff;selection-background-color:#662e7bff;selection-color:#ffffff}
+QLineEdit#CmdBoxNoteTitle:focus,QLineEdit#CmdBoxCategory:focus,QLineEdit#CmdBoxSubCategory:focus,QLineEdit#CmdBoxTags:focus,QLineEdit#CmdBoxDescription:focus,QTextEdit#CmdBoxCommand:focus{background:#40142655;border:1px solid #99c7ffff;color:#ffffff}
+QTextEdit#CmdBoxCommand{font-family:Consolas,Menlo,Monaco,monospace;color:#6bdcff;min-height:72px}
+QTextEdit#CmdCommand{font-family:Consolas,Menlo,Monaco,monospace;color:#6bdcff}
+QFrame#CommandInfoHero{background:#102a544d;border:1px solid #66a8ffff;border-radius:16px}
+QLabel#CommandInfoTitle{background:transparent;color:#ffffff;font-size:22px;font-weight:1000}
+QLabel#CommandInfoSub{background:transparent;color:#b9dcff;font-weight:800}
+QLabel#CommandInfoChip,QLabel#CommandInfoChipBlue{border-radius:10px;font-weight:900;min-height:28px;padding:0 12px}
+QLabel#CommandInfoChip{background:#59152a66;border:1px solid #667fbfff;color:#ffffff}
+QLabel#CommandInfoChipBlue{background:#102a54aa;border:1px solid #66a8ffff;color:#6bdcff}
+QFrame#CommandInfoSection{background:#33111f40;border:1px solid #4d78aaff;border-radius:16px}
+QLabel#CommandInfoSectionTitle{background:transparent;color:#9bd1ff;font-size:13px;font-weight:1000;padding:0 2px}
+QFrame#CommandInfoRow{background:#10203f66;border:1px solid #40667f99;border-radius:10px}
+QFrame#CommandInfoRow:hover{background:#12376a66;border:1px solid #99c7ffff}
+QLabel#CommandInfoKey{background:transparent;color:#9bd1ff;font-weight:1000}
+QLabel#CommandInfoValue{background:transparent;color:#ffffff;font-weight:800}
+QPlainTextEdit#CommandInfoCommand{background:#10203f66;border:1px solid #667fbfff;border-radius:12px;color:#6bdcff;font-family:Consolas,Menlo,Monaco,monospace;font-size:12px;padding:10px;selection-background-color:#662e7bff;selection-color:#ffffff}
+QPlainTextEdit#CommandInfoCommand:hover,QPlainTextEdit#CommandInfoCommand:focus{background:#10203f66;border:1px solid #99c7ffff;color:#6bdcff}
+QFrame#CmdBoxResizeHandle{background:#667fbf99;border:0;border-radius:3px;min-height:6px;max-height:6px;margin:0 48px}
+QFrame#CmdBoxResizeHandle:hover{background:#99c7ffff}
+QToolButton#CmdBoxInsert,QToolButton#CmdBoxCancel,QToolButton#CmdBoxElements{background:#59152a46;border:1px solid #667fbfff;border-radius:14px;color:#ffffff;font-weight:900;min-height:36px;max-height:36px;padding:0 18px}
+QToolButton#CmdBoxInsert:hover,QToolButton#CmdBoxCancel:hover,QToolButton#CmdBoxElements:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdBoxInsert:pressed,QToolButton#CmdBoxCancel:pressed,QToolButton#CmdBoxElements:pressed{background:#662e7bff;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdBoxInsert{color:#9bd1ff}
+QToolButton#CmdElementsBtn{background:#102a544d;border:1px solid #66a8ffff;border-radius:14px;color:#6bdcff;font-weight:900;min-height:36px;max-height:36px;padding:0 18px}
+QToolButton#CmdElementsBtn:hover{background:#12376a99;border:1px solid #99c7ffff;color:#6bdcff}
+QToolButton#CmdElementsBtn:pressed{background:#0b5cff;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdSaveBtn{background:#102a544d;border:1px solid #66a8ffff;border-radius:14px;color:#6bdcff;font-weight:900;min-height:36px;max-height:36px;padding:0 14px}
+QToolButton#CmdSaveBtn:hover{background:#12376a99;border:1px solid #99c7ffff;color:#6bdcff}
+QToolButton#CmdSaveBtn:pressed{background:#0b5cff;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdCancelBtn{background:#5a142166;border:1px solid #ff6b7a99;border-radius:14px;color:#ffb4bf;font-weight:900;min-height:36px;max-height:36px;padding:0 18px}
+QToolButton#CmdCancelBtn:hover{background:#7a1c2d99;border:1px solid #ff8f9c;color:#ffffff}
+QToolButton#CmdCancelBtn:pressed{background:#b8243e;border:1px solid #ffd1d7;color:#ffffff}
+QToolButton#CommandsInfoBtn{background:#102a544d;border:1px solid #66a8ffff;border-radius:13px;color:#6bdcff;font-size:16px;font-weight:1000;min-width:28px;max-width:28px;min-height:28px;max-height:28px;padding:0}
+QToolButton#CommandsInfoBtn:hover{background:#12376a99;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CommandsInfoBtn:pressed{background:#0b5cff;border:1px solid #99c7ffff;color:#ffffff}
+QLineEdit#CmdElementSearch{background:#33111f40;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;selection-background-color:#662e7bff;selection-color:#ffffff;min-height:36px;max-height:36px;padding:0 12px}
+QLineEdit#CmdElementSearch:focus{background:#40142655;border:1px solid #99c7ffff;color:#ffffff}
+QListWidget#CmdElementList{background:#33111f40;border:1px solid #667fbfff;border-radius:14px;color:#ffffff;outline:0;padding:6px}
+QListWidget#CmdElementList::item{background:#33152a46;border:1px solid #40667fbf;border-radius:10px;margin:3px 0;padding:8px 10px;color:#eaf3ff;font-family:Consolas,Menlo,Monaco,monospace;font-weight:900}
+QListWidget#CmdElementList::item:hover{background:#401b3555;border:1px solid #99c7ffff}
+QListWidget#CmdElementList::item:selected{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QListWidget#CmdElementSuggest{background:#102a544d;border:1px solid #66a8ffff;border-radius:12px;color:#6bdcff;outline:0;padding:4px}
+QListWidget#CmdElementSuggest::item{background:#0d244080;border:1px solid #40667fbf;border-radius:8px;margin:2px 0;padding:7px 10px;color:#6bdcff;font-family:Consolas,Menlo,Monaco,monospace;font-weight:900}
+QListWidget#CmdElementSuggest::item:hover{background:#12376a99;border:1px solid #99c7ffff;color:#6bdcff}
+QListWidget#CmdElementSuggest::item:selected{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QScrollArea#CmdPreviewScroll{background:transparent;border:0}
+QFrame#CmdPreviewWrap{background:transparent;border:0}
+QFrame#CmdPreviewCard{background:#4d101b2f;border:1px solid #66a8ffff;border-radius:16px}
+QLabel#CmdCardTitle{background:transparent;color:#ffffff;font-weight:900;font-size:14px}
+QLabel#CmdCardMeta{background:transparent;color:#b9dcff;font-weight:800}
+QFrame#SnippetPage{background:transparent;border:0}
+QFrame#SnippetSide,QFrame#SnippetResultsFrame,QFrame#SnippetViewer,QFrame#SnippetPlaceholders{background:#73101b2f;border:1px solid #4d78aaff;border-radius:16px}
+QFrame#SnippetSide:hover,QFrame#SnippetResultsFrame:hover,QFrame#SnippetViewer:hover,QFrame#SnippetPlaceholders:hover{background:#73101b2f;border:1px solid #4d78aaff}
+QLabel#SnippetSection{background:transparent;color:#b9dcff;font-weight:900}
+QLabel#SnippetTitle,QLabel#SnippetViewerTitle{background:transparent;color:#ffffff;font-weight:900;font-size:15px}
+QLabel#SnippetViewerTitle{font-size:18px}
+QLabel#SnippetMeta,QLabel#SnippetStatus{background:transparent;color:#d9e8ff;font-weight:800}
+QLabel#SnippetMissing{background:#99306355;border:1px solid #ff8ab5;border-radius:8px;color:#ffffff;font-weight:900;padding:6px 8px}
+QToolButton#SnippetBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;font-weight:900;min-height:34px;max-height:34px;padding:0 12px;text-align:left}
+QToolButton#SnippetBtn:hover{background:#80204a73;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#SnippetBtn:checked{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QListWidget#SnippetResults{background:transparent;border:0;outline:0;color:#ffffff}
+QListWidget#SnippetResults::item{background:#33152a46;border:1px solid #40667fbf;border-radius:12px;margin:4px 0;padding:8px 10px;color:#eaf3ff}
+QListWidget#SnippetResults::item:hover{background:#401b3555;border:1px solid #99c7ffff}
+QListWidget#SnippetResults::item:selected{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QPlainTextEdit#SnippetCommand{background:#180d1c66;border:1px solid #667fbfff;border-radius:14px;color:#9bd1ff;font-family:Consolas,Menlo,Monaco,monospace;font-weight:800;padding:10px}
+QFrame#SimpleSnippetPage{background:transparent;border:0}
+QScrollArea#SimpleSnippetScroll{background:transparent;border:0}
+QFrame#SimpleSnippetWrap{background:transparent;border:0}
+QLabel#SimpleSnippetStatus{background:#33152a46;border:1px solid #40667fbf;border-radius:12px;color:#d9e8ff;font-weight:800;padding:8px 12px}
+QFrame#SimpleSnippetCard{background:#73101b2f;border:1px solid #4d78aaff;border-radius:14px}
+QFrame#SimpleSnippetCard:hover{background:#8a122b4a;border:1px solid #99c7ffff}
+QLabel#SimpleSnippetTitle{background:transparent;color:#ffffff;font-weight:900;font-size:15px}
+QLabel#SimpleSnippetMeta{background:transparent;color:#b9dcff;font-weight:800}
+QLabel#SimpleSnippetCommand{background:#180d1c66;border:1px solid #667fbfff;border-radius:10px;color:#9bd1ff;font-family:Consolas,Menlo,Monaco,monospace;font-weight:800;padding:8px}
+QLabel#SimpleSnippetDetail{background:#33152a46;border:1px solid #40667fbf;border-radius:10px;color:#eaf3ff;font-weight:800;padding:8px}
+QToolButton#SimpleSnippetTopBtn,QToolButton#SimpleSnippetBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;font-weight:900;min-height:34px;max-height:34px;padding:0 14px}
+QToolButton#SimpleSnippetTopBtn:hover,QToolButton#SimpleSnippetBtn:hover{background:#80204a73;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#SimpleSnippetTopBtn:checked{background:#662e7bff;border:2px solid #2e7bff;color:#ffffff}
+QFrame#CmdCardCodeWrap{background:transparent;border:0}
+QTextBrowser#CmdCardCode{background:#26101d33;border:1px solid #667fbfff;border-radius:12px;color:#6bdcff;font-family:Consolas,Menlo,Monaco,monospace;padding:8px}
+QToolButton#CmdCardCopy{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;font-weight:900;min-width:34px;max-width:34px;min-height:34px;max-height:34px;padding:0}
+QToolButton#CmdCardCopy:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdCardBtn,QToolButton#CmdCardDelete{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;font-weight:900;min-height:30px;max-height:30px;padding:0 12px}
+QToolButton#CmdCardBtn:hover,QToolButton#CmdCardDelete:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#CmdCardDelete{color:#ffd6df;min-width:34px;max-width:34px;padding:0}
+QFrame#AppTitleBar{background:#73101b2f;border:1px solid #4d78aaff;border-radius:14px}
+QLabel#AppTitleIcon{background:transparent;border:0}
+QLabel#AppTitleText{background:transparent;border:0;color:#ffffff;font-weight:900;font-size:13px}
+QToolButton#WindowControlBtn,QToolButton#WindowShrinkBtn,QToolButton#WindowCloseBtn{background:#59152a46;border:1px solid #667fbfff;border-radius:10px;color:#ffffff;font-weight:900;min-width:34px;max-width:34px;min-height:30px;max-height:30px;padding:0;text-align:center}
+QToolButton#WindowControlBtn:hover,QToolButton#WindowShrinkBtn:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QToolButton#WindowCloseBtn:hover{background:#7b1730;border:1px solid #ff8ab5;color:#ffffff}
+QSizeGrip#WindowSizeGrip{background:transparent;width:18px;height:18px}

@@ -9,7 +9,7 @@ try:
     from Cores.Update import sync_installed_version as _sync_installed_version
 except Exception:
     _UPDATE_APP_NAME="LOYA Note"
-    _DEFAULT_APP_VERSION="4.0.1"
+    _DEFAULT_APP_VERSION="5.0.0"
     _recovery=None
     def _get_app_version():
         return _DEFAULT_APP_VERSION
@@ -169,7 +169,7 @@ def _read_requirements(p):
                 {"name":"PyQt6","version":"==6.10.1"},
                 {"name":"PyQt6-Qt6","version":"==6.10.1"},
                 {"name":"PyQt6-sip","version":"==13.10.2"},
-                {"name":"openpyxl","version":"==3.1.5"}
+                {"name":"cryptography","version":"==42.0.5"}
             ]}
         }
     py_req=((d.get("python") or {}).get("requires") if isinstance(d.get("python"),dict) else "")
