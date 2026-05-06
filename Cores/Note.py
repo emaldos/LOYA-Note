@@ -29,7 +29,7 @@ _DEFAULT_FONT_SIZE=13.0
 _CODE_COLOR="#6bdcff"
 _CODE_FONT="Consolas"
 _NOTE_REF_COLOR_DEFAULT="#b197fc"
-_NOTE_LINK_COLOR_DEFAULT="#b197fc"
+_NOTE_LINK_COLOR_DEFAULT="#4dabf7"
 _NAV_UNGROUPED_KEY="__ungrouped__"
 _NOTE_REF_RX=re.compile(r"-Notename-([^\r\n-]+)-",re.I)
 _NOTE_LINK_ANCHOR="notelink:"
@@ -595,13 +595,12 @@ def _decode_cmd_data(token):
         return d if isinstance(d,dict) else {}
     except Exception:
         return {}
-def _encode_note_link_data(note,color):
+def _encode_note_link_data(note,color=None):
     ref=_note_refs.normalize_note_ref(note)
     d={
         "note_id":ref.get("note_id"),
         "note_name":ref.get("note_name",""),
         "note":ref.get("note_name",""),
-        "color":_norm_hex_color(color),
     }
     raw=json.dumps(d,ensure_ascii=False)
     b=base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii")
@@ -893,8 +892,15 @@ class _CreateNoteDialog(QDialog):
         root.addWidget(self.body,1)
         self.body_layout=QVBoxLayout(self.body);self.body_layout.setContentsMargins(10,10,10,10);self.body_layout.setSpacing(0)
     def closeEvent(self,e):
+        owner=None
+        try:owner=self.parent()
+        except Exception:owner=None
         try:
-            owner=self.parent()
+            if owner and hasattr(owner,"_on_create_dialog_close_requested") and not owner._on_create_dialog_close_requested():
+                e.ignore();return
+        except Exception:
+            pass
+        try:
             if owner and hasattr(owner,"_on_create_dialog_closed"):
                 owner._on_create_dialog_closed()
         except Exception:
@@ -905,8 +911,8 @@ class _NoteLinkDlg(QDialog):
     def __init__(self,parent,notes,title_value="",note_value="",color_value=""):
         super().__init__(parent)
         self.setObjectName("NoteAddDialog")
-        self.setWindowTitle("Add Link")
-        self.resize(620,520)
+        self.setWindowTitle("Add Note Link")
+        self.resize(640,500)
         ico=_abs("..","Assets","logox.png")
         if os.path.isfile(ico):self.setWindowIcon(QIcon(ico))
         refs=[]
@@ -917,7 +923,6 @@ class _NoteLinkDlg(QDialog):
         self._notes=_note_refs.dedupe_note_refs(refs)
         self._notes.sort(key=lambda item:_note_refs.note_ref_name(item).lower())
         self._view=[]
-        self._color=_norm_hex_color(color_value) or _NOTE_LINK_COLOR_DEFAULT
         root=QVBoxLayout(self);root.setContentsMargins(14,14,14,14);root.setSpacing(12)
         box=QFrame(self);box.setObjectName("TargetDialogFrame")
         v=QVBoxLayout(box);v.setContentsMargins(12,12,12,12);v.setSpacing(10)
@@ -926,27 +931,21 @@ class _NoteLinkDlg(QDialog):
         head.addWidget(t,1)
         v.addLayout(head)
         g=QGridLayout();g.setContentsMargins(0,0,0,0);g.setHorizontalSpacing(12);g.setVerticalSpacing(10)
-        self.in_title=QLineEdit(box);self.in_title.setObjectName("CmdBoxNoteTitle");self.in_title.setPlaceholderText("Button title");self.in_title.setText((title_value or "").strip())
+        self.in_title=QLineEdit(box);self.in_title.setObjectName("CmdBoxNoteTitle");self.in_title.setPlaceholderText("Shown text");self.in_title.setText((title_value or "").strip())
         self.in_note=QLineEdit(box);self.in_note.setObjectName("CmdBoxNoteTitle");self.in_note.setPlaceholderText("Choose note");self.in_note.setText((note_value or "").strip())
-        self.btn_color=QToolButton(box);self.btn_color.setObjectName("NoteLinkColor");self.btn_color.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_color.setText("Color")
-        self.btn_color.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        cm=QMenu(self.btn_color)
-        for name,hexv in (("Default",None),("Light Purple","#b197fc"),("Blue","#4dabf7"),("Green","#8ce99a"),("Yellow","#ffd43b"),("Orange","#ff922b"),("Red","#ff6b6b"),("White","#ffffff"),("Black","#000000")):
-            a=QAction(name,self.btn_color);a.triggered.connect(lambda chk=False,v=hexv:self._set_color(v));cm.addAction(a)
-        cm.addSeparator()
-        ac=QAction("Custom...",self.btn_color);ac.triggered.connect(self._custom_color);cm.addAction(ac)
-        self.btn_color.setMenu(cm)
-        g.addWidget(QLabel("Button Title",box),0,0);g.addWidget(self.in_title,0,1,1,2)
+        self.preview=QLabel("",box);self.preview.setObjectName("NoteLinkPreview");self.preview.setAlignment(Qt.AlignmentFlag.AlignCenter);self.preview.setMinimumHeight(42)
+        g.addWidget(QLabel("Link Title",box),0,0);g.addWidget(self.in_title,0,1,1,2)
         g.addWidget(QLabel("Note",box),1,0);g.addWidget(self.in_note,1,1,1,2)
-        g.addWidget(QLabel("Color",box),2,0);g.addWidget(self.btn_color,2,1,1,2)
+        g.addWidget(QLabel("Preview",box),2,0);g.addWidget(self.preview,2,1,1,2)
         v.addLayout(g)
-        self.search=QLineEdit(box);self.search.setObjectName("NoteAddSearch");self.search.setPlaceholderText("Search notes...")
+        self.in_title.textChanged.connect(self._apply_preview);self.in_note.textChanged.connect(self._apply_preview)
+        self.search=QLineEdit(box);self.search.setObjectName("NoteAddSearch");self.search.setPlaceholderText("Search notes")
         self.search.textChanged.connect(self._render_notes)
         v.addWidget(self.search,0)
         self.list_wrap=QFrame(box);self.list_wrap.setObjectName("NoteAddTableFrame")
         lw=QVBoxLayout(self.list_wrap);lw.setContentsMargins(10,10,10,10);lw.setSpacing(6)
         self.tbl=QTableWidget(self.list_wrap);self.tbl.setObjectName("NoteAddTable")
-        self.tbl.setColumnCount(1);self.tbl.setHorizontalHeaderLabels(["Note"])
+        self.tbl.setColumnCount(1);self.tbl.setHorizontalHeaderLabels(["Available Notes"])
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.tbl.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -972,24 +971,14 @@ class _NoteLinkDlg(QDialog):
             self.in_note.setCompleter(comp)
         if not self.in_title.text().strip() and self.in_note.text().strip():
             self.in_title.setText(self.in_note.text().strip())
-        self._apply_color_btn()
+        self._apply_preview()
         self._render_notes()
-    def _apply_color_btn(self):
-        color=_norm_hex_color(self._color) or _NOTE_LINK_COLOR_DEFAULT
-        fg=_auto_fg_for_bg(color)
-        self.btn_color.setStyleSheet(f"QToolButton#NoteLinkColor{{background:{color};color:{fg};border:1px solid #2b2b2b;border-radius:8px;padding:2px 8px;}}")
-    def _set_color(self,hexv):
-        self._color=_norm_hex_color(hexv) or _NOTE_LINK_COLOR_DEFAULT
-        self._apply_color_btn()
-    def _custom_color(self):
-        val,ok=QInputDialog.getText(self,"Custom Color","Hex color (#RRGGBB):",text=_norm_hex_color(self._color) or _NOTE_LINK_COLOR_DEFAULT)
-        if not ok:return
-        c=_norm_hex_color(val)
-        if not c:
-            QMessageBox.warning(self,"Invalid","Enter a valid hex color like #b197fc.")
-            return
-        self._color=c
-        self._apply_color_btn()
+    def _apply_preview(self):
+        title=(self.in_title.text() or "").replace("\r","\n").replace("\n"," ").strip()
+        note=_norm(self.in_note.text())
+        text=title or note or "Note Link"
+        self.preview.setText(f"<span style='color:{_NOTE_LINK_COLOR_DEFAULT};text-decoration:underline;font-weight:900;'>{html.escape(text)}</span>")
+        self.preview.setStyleSheet("QLabel#NoteLinkPreview{background:transparent;border:1px solid #667fbfff;border-radius:12px;padding:7px 14px;}")
     def _render_notes(self):
         q=_norm(self.search.text()).lower()
         self._view=[n for n in self._notes if not q or q in _note_refs.note_ref_name(n).lower()]
@@ -1036,7 +1025,7 @@ class _NoteLinkDlg(QDialog):
             title=note
             self.in_title.setText(title)
         ref=ref or _note_refs.serialize_note_ref(note_name=note)
-        self._vals={"title":title,"note_id":ref.get("note_id"),"note_name":ref.get("note_name",""),"note":ref.get("note_name",""),"color":_norm_hex_color(self._color) or _NOTE_LINK_COLOR_DEFAULT}
+        self._vals={"title":title,"note_id":ref.get("note_id"),"note_name":ref.get("note_name",""),"note":ref.get("note_name","")}
         self.accept()
     def vals(self):return self._vals
 class _CmdBlockDlg(QDialog):
@@ -1866,20 +1855,20 @@ class NoteEdit(QTextEdit):
             return {"start":start,"end":end,"note_id":note_id,"note_name":note_name,"note":note_name,"color":color,"title":title,"href":target}
         except Exception:
             return None
-    def _note_link_format(self,note,color):
+    def _note_link_format(self,note,color=None):
         ref=_note_refs.normalize_note_ref(note)
-        nm=_note_refs.note_ref_name(ref)
-        c=_norm_hex_color(color) or _NOTE_LINK_COLOR_DEFAULT
-        token=_encode_note_link_data(ref,c)
+        token=_encode_note_link_data(ref)
         fmt=QTextCharFormat()
         fmt.setAnchor(True)
         fmt.setAnchorHref(_NOTE_LINK_ANCHOR+token)
-        fmt.setBackground(QColor(c))
-        fmt.setForeground(QColor(_auto_fg_for_bg(c)))
+        fmt.setBackground(QBrush(Qt.BrushStyle.NoBrush))
+        fmt.setForeground(QColor(_NOTE_LINK_COLOR_DEFAULT))
         fmt.setFontWeight(800)
-        fmt.setFontUnderline(False)
+        fmt.setFontUnderline(True)
+        try:fmt.setUnderlineColor(QColor(_NOTE_LINK_COLOR_DEFAULT))
+        except Exception:pass
         return fmt
-    def insert_note_link(self,note,title,color,cursor=None):
+    def insert_note_link(self,note,title,color=None,cursor=None):
         ref=_note_refs.normalize_note_ref(note)
         nm=_note_refs.note_ref_name(ref)
         if not nm:return False
@@ -1900,7 +1889,7 @@ class NoteEdit(QTextEdit):
         cur.endEditBlock()
         self.setTextCursor(cur)
         return True
-    def _replace_note_link(self,info,note,title,color):
+    def _replace_note_link(self,info,note,title,color=None):
         if not info:return False
         ref=_note_refs.normalize_note_ref(note,note_id=info.get("note_id"),note_name=info.get("note_name",info.get("note","")))
         nm=_note_refs.note_ref_name(ref)
@@ -1929,13 +1918,12 @@ class NoteEdit(QTextEdit):
         return True
     def _edit_note_link(self,info):
         if not info or not callable(self._on_note_link_edit):return
-        data={"note_id":info.get("note_id"),"note_name":info.get("note_name",info.get("note","")),"note":info.get("note_name",info.get("note","")),"title":info.get("title",""),"color":info.get("color","")}
+        data={"note_id":info.get("note_id"),"note_name":info.get("note_name",info.get("note","")),"note":info.get("note_name",info.get("note","")),"title":info.get("title","")}
         out=self._on_note_link_edit(data)
         if not isinstance(out,dict):return
         note={"note_id":out.get("note_id",info.get("note_id")),"note_name":out.get("note_name",out.get("note",info.get("note_name",info.get("note",""))))}
         title=out.get("title","") or ""
-        color=out.get("color","") or info.get("color","")
-        self._replace_note_link(info,note,title,color)
+        self._replace_note_link(info,note,title)
     def normalize_note_links(self,resolve_note):
         if not callable(resolve_note):return False
         doc=self.document()
@@ -1952,18 +1940,16 @@ class NoteEdit(QTextEdit):
                         data=_decode_note_link_data(href[len(_NOTE_LINK_ANCHOR):])
                         ref=resolve_note(data)
                         if ref:
-                            new_href=_NOTE_LINK_ANCHOR+_encode_note_link_data(ref,data.get("color",""))
-                            if new_href!=href:
-                                changes.append((frag.position(),frag.length(),ref,data.get("color","")))
+                            changes.append((frag.position(),frag.length(),ref))
                 it+=1
             block=block.next()
         if not changes:return False
         cur=QTextCursor(doc)
         cur.beginEditBlock()
-        for pos,length,ref,color in reversed(changes):
+        for pos,length,ref in reversed(changes):
             cur.setPosition(pos)
             cur.setPosition(pos+length,QTextCursor.MoveMode.KeepAnchor)
-            cur.mergeCharFormat(self._note_link_format(ref,color))
+            cur.mergeCharFormat(self._note_link_format(ref))
         cur.endEditBlock()
         return True
     def _start_link_drag(self,info):
@@ -2438,12 +2424,12 @@ class Widget(QWidget):
         self.in_name=QLineEdit(self.tab_create);self.in_name.setObjectName("NoteName");self.in_name.setPlaceholderText("Note Name");self.in_name.setMaxLength(256)
         self.in_group=SelectInput("NoteGroup","Group (optional)",self.tab_create);self.in_group.setMaxLength(256);self.in_group.setMinimumWidth(240)
         self.btn_add=QToolButton(self.tab_create);self.btn_add.setObjectName("NoteAddCmd");self.btn_add.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_add.setText("Add Command")
-        self.btn_link=QToolButton(self.tab_create);self.btn_link.setObjectName("NoteAddLink");self.btn_link.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_link.setText("Add Link")
+        self.btn_link=QToolButton(self.tab_create);self.btn_link.setObjectName("NoteAddLink");self.btn_link.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_link.setText("Link");self.btn_link.setToolTip("Add Note Link")
         self.btn_pick=QToolButton(self.tab_create);self.btn_pick.setObjectName("NotePickCmd");self.btn_pick.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_pick.setText("Pick Command")
         self.btn_clear=QToolButton(self.tab_create);self.btn_clear.setObjectName("NoteClear");self.btn_clear.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_clear.setText("New Note")
         self.btn_save=QToolButton(self.tab_create);self.btn_save.setObjectName("NoteSave");self.btn_save.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_save.setText("Save")
         for b in (self.btn_add,self.btn_link,self.btn_pick,self.btn_save):b.setProperty("editorTop",True)
-        self.btn_add.setMinimumWidth(128);self.btn_link.setMinimumWidth(92);self.btn_pick.setMinimumWidth(126);self.btn_save.setFixedWidth(44);self.btn_clear.hide()
+        self.btn_add.setMinimumWidth(128);self.btn_link.setMinimumWidth(66);self.btn_pick.setMinimumWidth(126);self.btn_save.setFixedWidth(44);self.btn_clear.hide()
         si=_abs("..","Assets","Save.png")
         if os.path.isfile(si):self.btn_save.setIcon(QIcon(si));self.btn_save.setIconSize(QSize(18,18));self.btn_save.setText("");self.btn_save.setToolTip("Save")
         for b in (self.btn_add,self.btn_link,self.btn_pick,self.btn_clear,self.btn_save):
@@ -2566,6 +2552,7 @@ class Widget(QWidget):
         self.in_name.textChanged.connect(self._mark_dirty)
         self.in_group.textChanged.connect(self._mark_dirty)
         self.edit.textChanged.connect(self._mark_dirty)
+        self.edit.cursorPositionChanged.connect(self._sync_format_controls)
         self._placeholder_highlighter=_PlaceholderHighlighter(self.edit.document())
         try:self._placeholder_highlighter.set_note_ref_color(self._note_ref_color)
         except Exception:pass
@@ -3439,6 +3426,8 @@ class Widget(QWidget):
         try:self.in_name.setFocus()
         except Exception:pass
         return True
+    def _on_create_dialog_close_requested(self):
+        return self._confirm_close_create_dialog()
     def _on_create_dialog_closed(self):
         self._detach_create_panel()
         self._create_dialog=None
@@ -3451,6 +3440,18 @@ class Widget(QWidget):
             except Exception:pass
         try:self._detach_create_panel()
         except Exception:pass
+    def _confirm_close_create_dialog(self):
+        if not self._needs_save_prompt():return True
+        w=getattr(self,"_create_dialog",None) or (self.window() if self.window() else self)
+        msg=QMessageBox(w);msg.setWindowTitle("Unsaved Note");msg.setText("Save changes before closing?");msg.setIcon(QMessageBox.Icon.Warning)
+        save=msg.addButton("Save",QMessageBox.ButtonRole.AcceptRole);discard=msg.addButton("Discard",QMessageBox.ButtonRole.DestructiveRole);cancel=msg.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(save);msg.exec()
+        btn=msg.clickedButton()
+        if btn==save:return bool(self._save_note(False))
+        if btn==discard:
+            self._new_note()
+            return True
+        return False
     def _on_tab(self,i):
         try:self._cmd_box_hide()
         except:pass
@@ -3587,12 +3588,36 @@ class Widget(QWidget):
         if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
         c.mergeCharFormat(fmt)
         self.edit.mergeCurrentCharFormat(fmt)
+    def _fmt_foreground_hex(self,fmt):
+        try:
+            b=fmt.foreground()
+            if b.style()==Qt.BrushStyle.NoBrush:return None
+            c=b.color()
+            return c.name() if c.isValid() else None
+        except Exception:return None
+    def _set_format_controls(self,bold=False,italic=False,underline=False,size=None,color=None):
+        for btn,val in ((self.b_b,bold),(self.b_i,italic),(self.b_u,underline)):
+            try:btn.blockSignals(True);btn.setChecked(bool(val));btn.blockSignals(False)
+            except Exception:pass
+        try:
+            s=float(size) if size else _DEFAULT_FONT_SIZE
+            self._current_font_size=s
+            self.font_size.blockSignals(True);self.font_size.setCurrentText(str(int(s)) if float(s).is_integer() else str(s));self.font_size.blockSignals(False)
+        except Exception:pass
+        try:self._update_color_button(color)
+        except Exception:pass
+    def _sync_format_controls(self):
+        try:
+            fmt=self.edit.currentCharFormat()
+            size=fmt.fontPointSize() or _DEFAULT_FONT_SIZE
+            self._set_format_controls(fmt.fontWeight()>=700,fmt.fontItalic(),fmt.fontUnderline(),size,self._fmt_foreground_hex(fmt))
+        except Exception:pass
     def _fmt_bold(self):
-        fmt=QTextCharFormat();fmt.setFontWeight(900 if self.b_b.isChecked() else 400);self._merge_charfmt(fmt)
+        fmt=QTextCharFormat();fmt.setFontWeight(900 if self.b_b.isChecked() else 400);self._merge_charfmt(fmt);self._dirty=True
     def _fmt_italic(self):
-        fmt=QTextCharFormat();fmt.setFontItalic(bool(self.b_i.isChecked()));self._merge_charfmt(fmt)
+        fmt=QTextCharFormat();fmt.setFontItalic(bool(self.b_i.isChecked()));self._merge_charfmt(fmt);self._dirty=True
     def _fmt_underline(self):
-        fmt=QTextCharFormat();fmt.setFontUnderline(bool(self.b_u.isChecked()));self._merge_charfmt(fmt)
+        fmt=QTextCharFormat();fmt.setFontUnderline(bool(self.b_u.isChecked()));self._merge_charfmt(fmt);self._dirty=True
     def _set_font_size(self,t):
         try:size=float(t)
         except:return
@@ -3674,13 +3699,12 @@ class Widget(QWidget):
             pass
         self.edit.setTextCursor(cur);self._dirty=True
     def _clear_heading_format(self):
-        fmt=QTextCharFormat();fmt.setFontPointSize(_DEFAULT_FONT_SIZE);fmt.setFontWeight(400);self._merge_blockfmt(fmt)
-        self._current_font_size=_DEFAULT_FONT_SIZE
         try:
-            self.font_size.blockSignals(True)
-            self.font_size.setCurrentText(str(int(_DEFAULT_FONT_SIZE)))
-            self.font_size.blockSignals(False)
+            cur=self.edit.textCursor();cur.clearSelection();self.edit.setTextCursor(cur)
+            fmt=QTextCharFormat();fmt.setFontPointSize(_DEFAULT_FONT_SIZE);fmt.setFontWeight(400);fmt.setFontItalic(False);fmt.setFontUnderline(False);fmt.clearForeground();fmt.clearBackground();fmt.setAnchor(False);fmt.setAnchorHref("")
+            self.edit.setCurrentCharFormat(fmt)
         except:pass
+        self._set_format_controls(False,False,False,_DEFAULT_FONT_SIZE,None)
     def _heading_enter(self):
         try:self._maybe_insert_hr()
         except Exception:pass
@@ -4418,20 +4442,19 @@ class Widget(QWidget):
         sel=cur.selectedText().replace("\u2029","\n").strip()
         if "\n" in sel:sel=" ".join([s.strip() for s in sel.splitlines() if s.strip()])
         notes=self._note_link_notes()
-        dlg=_NoteLinkDlg(self,notes,sel,"",_NOTE_LINK_COLOR_DEFAULT)
+        dlg=_NoteLinkDlg(self,notes,sel,"")
         if dlg.exec()!=QDialog.DialogCode.Accepted:return
         vals=dlg.vals()
         if not isinstance(vals,dict):return
-        note={"note_id":vals.get("note_id"),"note_name":vals.get("note_name",vals.get("note",""))};title=vals.get("title","");color=vals.get("color","")
-        if self.edit.insert_note_link(note,title,color,cur):
+        note={"note_id":vals.get("note_id"),"note_name":vals.get("note_name",vals.get("note",""))};title=vals.get("title","")
+        if self.edit.insert_note_link(note,title,cursor=cur):
             try:self.edit.setFocus()
             except Exception:pass
     def _edit_note_link_dialog(self,data):
         notes=self._note_link_notes()
         title=(str(data.get("title","")) if isinstance(data,dict) else "").replace("\r","\n").replace("\n"," ").strip()
         note=_note_refs.note_ref_name(data) if isinstance(data,dict) else ""
-        color=data.get("color","") if isinstance(data,dict) else ""
-        dlg=_NoteLinkDlg(self,notes,title,note,color)
+        dlg=_NoteLinkDlg(self,notes,title,note)
         if dlg.exec()!=QDialog.DialogCode.Accepted:return None
         return dlg.vals()
     def _add_command(self,from_menu):
@@ -4804,6 +4827,8 @@ class Widget(QWidget):
                 return False
             sig=self._current_note_sig(name,htmls,group_name)
             if self._last_sig==sig and not self._dirty:
+                try:self._clear_heading_format()
+                except Exception:pass
                 self._toast_show("Already saved",1500)
                 if reset_after:QTimer.singleShot(0,self._close_create_dialog_after_save)
                 _log("[*]",f"Save skipped (already saved): {name}")
@@ -4830,6 +4855,8 @@ class Widget(QWidget):
             self._orig_name=name
             self._last_sig=sig
             self._dirty=False
+            try:self._clear_heading_format()
+            except Exception:pass
             try:
                 if prev_name and _kci(prev_name)!=_kci(name):self._rename_note_meta(prev_name,{"note_id":nid,"note_name":name})
             except Exception:
