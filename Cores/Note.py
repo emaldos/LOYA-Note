@@ -2,7 +2,7 @@ import os,sqlite3,logging,hashlib,re,json,base64,html
 from logging.handlers import RotatingFileHandler
 from datetime import datetime,timezone
 from PyQt6.QtCore import Qt,QSize,QTimer,pyqtSignal,QRect,QEvent,QObject,QStringListModel,QUrl
-from PyQt6.QtGui import QIcon,QKeySequence,QTextCharFormat,QTextListFormat,QTextTableFormat,QTextCursor,QShortcut,QAction,QColor,QTextBlockFormat,QImage,QTextImageFormat,QTextFormat,QTextLength,QTextDocumentFragment,QSyntaxHighlighter,QDrag,QFontMetrics,QBrush,QPainter,QPen,QLinearGradient,QFont
+from PyQt6.QtGui import QIcon,QKeySequence,QTextCharFormat,QTextListFormat,QTextTableFormat,QTextCursor,QShortcut,QAction,QColor,QTextBlockFormat,QImage,QTextImageFormat,QTextFormat,QTextLength,QTextDocumentFragment,QSyntaxHighlighter,QDrag,QFontMetrics,QBrush,QPainter,QPen,QLinearGradient,QFont,QTextTable
 from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QLineEdit,QToolButton,QTextEdit,QMessageBox,QDialog,QGridLayout,QSpinBox,QTabWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QMenu,QComboBox,QFileDialog,QInputDialog,QSplitter,QCompleter,QListWidget,QListWidgetItem,QApplication,QScrollArea,QButtonGroup,QSizePolicy,QTextBrowser
 from Cores import common_db as _common_db
 from Cores import note_refs as _note_refs
@@ -1623,6 +1623,7 @@ class NoteEdit(QTextEdit):
         ih.addWidget(self._img_minus,0);ih.addWidget(self._img_plus,0);ih.addWidget(self._img_fit,0)
         self._img_tool.hide()
         self.cursorPositionChanged.connect(self._update_table_tools)
+        self.selectionChanged.connect(self._update_table_tools)
         self.cursorPositionChanged.connect(self._fix_cmd_control_cell)
         try:self.verticalScrollBar().valueChanged.connect(self._update_table_tools)
         except Exception:pass
@@ -1984,12 +1985,49 @@ class NoteEdit(QTextEdit):
         cur.setPosition(end,QTextCursor.MoveMode.KeepAnchor)
         cur.removeSelectedText()
         cur.endEditBlock()
+    def _iter_tables(self,frame=None):
+        try:frame=frame or self.document().rootFrame();it=frame.begin()
+        except Exception:return
+        while not it.atEnd():
+            fr=it.currentFrame()
+            if fr:
+                if isinstance(fr,QTextTable):yield fr
+                else:
+                    for t in self._iter_tables(fr):yield t
+            it+=1
+    def tables_for_cursor_or_selection(self,include_cmd=False):
+        cur=self.textCursor()
+        if not cur.hasSelection():
+            table=cur.currentTable()
+            return [table] if table and (include_cmd or not self._is_cmd_table(table)) else []
+        s=cur.selectionStart();e=cur.selectionEnd()
+        tables=[]
+        for table in self._iter_tables():
+            if not include_cmd and self._is_cmd_table(table):continue
+            try:
+                ts=table.firstCursorPosition().position();te=table.lastCursorPosition().position()
+                if s<=te and e>=ts:tables.append(table)
+            except Exception:pass
+        return tables
+    def table_for_cursor_or_selection(self,include_cmd=False):
+        tables=self.tables_for_cursor_or_selection(include_cmd)
+        return tables[0] if tables else None
     def _table_at_cursor(self):
         cur=self.textCursor()
-        table=cur.currentTable()
-        if not table or self._is_cmd_table(table):return None,None,None
-        cell=table.cellAt(cur)
-        return table,cell.row(),cell.column()
+        table=self.table_for_cursor_or_selection(False)
+        if not table:return None,None,None
+        row=col=0
+        try:
+            doc=self.document();limit=max(0,doc.characterCount()-1)
+            probes=[cur.position(),cur.anchor(),cur.selectionStart(),cur.selectionEnd()-1]
+            for p in probes:
+                p=max(0,min(limit,int(p)))
+                cc=QTextCursor(doc);cc.setPosition(p)
+                if cc.currentTable() is table:
+                    cell=table.cellAt(cc);row=cell.row();col=cell.column();break
+        except Exception:row=col=0
+        if row<0 or col<0:row=col=0
+        return table,row,col
     def _table_next_cell(self,table,cur):
         cell=table.cellAt(cur)
         row=cell.row();col=cell.column()
@@ -2020,17 +2058,26 @@ class NoteEdit(QTextEdit):
         self._tbl_tool.show();self._tbl_del.show()
     def _position_table_tools(self,table):
         try:
-            cell0=table.cellAt(0,0)
-            cell1=table.cellAt(table.rows()-1,table.columns()-1)
-            r0=self.cursorRect(cell0.firstCursorPosition())
-            r1=self.cursorRect(cell1.lastCursorPosition())
-            x=r1.right()+6
-            y=r0.top()
+            xs=[];ys=[]
+            for r in range(table.rows()):
+                for c in range(table.columns()):
+                    cell=table.cellAt(r,c)
+                    for cur in (cell.firstCursorPosition(),cell.lastCursorPosition()):
+                        rr=self.cursorRect(cur);xs.extend([rr.left(),rr.right()]);ys.extend([rr.top(),rr.bottom()])
+            if not xs or not ys:return
+            left=max(0,min(xs));right=max(xs);top=max(0,min(ys));bottom=max(ys)
             viewport=self.viewport()
-            if x+self._tbl_tool.width()>viewport.width():x=max(0,viewport.width()-self._tbl_tool.width()-4)
-            if y<0:y=0
+            gap=8;tool_w=max(self._tbl_tool.sizeHint().width(),self._tbl_del.sizeHint().width(),28);tool_h=max(self._tbl_tool.sizeHint().height(),28);del_h=max(self._tbl_del.sizeHint().height(),28);stack_h=tool_h+gap+del_h
+            if right+gap+tool_w<=viewport.width():
+                x=right+gap;y=top
+            elif bottom+gap+stack_h<=viewport.height():
+                x=max(0,min(left,viewport.width()-tool_w));y=bottom+gap
+            elif top-gap-stack_h>=0:
+                x=max(0,min(left,viewport.width()-tool_w));y=top-gap-stack_h
+            else:
+                x=max(0,viewport.width()-tool_w-gap);y=max(0,min(top,viewport.height()-stack_h))
             self._tbl_tool.move(x,y)
-            self._tbl_del.move(x,y+self._tbl_tool.height()+4)
+            self._tbl_del.move(x,y+tool_h+gap)
         except Exception:
             pass
     def _show_table_menu(self):
@@ -3667,12 +3714,34 @@ class Widget(QWidget):
         else:fmt.clearForeground()
         self._merge_charfmt(fmt);self._dirty=True
         self._update_color_button(hexv)
+    def _align_table(self,align):
+        try:
+            cur=self.edit.textCursor()
+            tables=self.edit.tables_for_cursor_or_selection(False)
+        except Exception:tables=[]
+        if not tables:return False
+        done=[]
+        for table in tables:
+            if not table or self._is_cmd_table(table):continue
+            tf=table.format();tf.setAlignment(align);table.setFormat(tf);done.append(table)
+        if not done:return False
+        try:self.edit._position_table_tools(done[-1])
+        except Exception:pass
+        self._dirty=True
+        if not cur.hasSelection():return True
+        try:
+            if len(done)!=1:return False
+            s=cur.selectionStart();e=cur.selectionEnd();ts=done[0].firstCursorPosition().position();te=done[0].lastCursorPosition().position()
+            return s>=ts and e<=te+1
+        except Exception:return False
     def _align_left(self):
+        if self._align_table(Qt.AlignmentFlag.AlignLeft):return
         c=self._cursor()
         if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
         fmt=QTextBlockFormat();fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
         c.mergeBlockFormat(fmt);self.edit.setTextCursor(c);self._dirty=True
     def _align_center(self):
+        if self._align_table(Qt.AlignmentFlag.AlignHCenter):return
         c=self._cursor()
         if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
         fmt=QTextBlockFormat();fmt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
@@ -3748,7 +3817,7 @@ class Widget(QWidget):
         if d.exec()!=QDialog.DialogCode.Accepted:return
         r,c=d.vals()
         cur=self._cursor()
-        tf=QTextTableFormat();tf.setCellPadding(4);tf.setCellSpacing(1);tf.setBorder(1)
+        tf=QTextTableFormat();tf.setCellPadding(4);tf.setCellSpacing(1);tf.setBorder(1);tf.setAlignment(Qt.AlignmentFlag.AlignLeft)
         cur.insertTable(r,c,tf);self.edit.setTextCursor(cur);self._dirty=True
     def _cmd_data(self,nt,cat,sub,desc,tags,cmd):
         return {
@@ -4765,7 +4834,9 @@ class Widget(QWidget):
         if not n:return
         if col==0:
             return self._toggle_pin(n)
-        if col in (1,2,3,4):
+        if col==4:
+            return self._edit_list_note(n)
+        if col in (1,2,3):
             return
         if col==5:
             w=self.window() if self.window() else self
