@@ -4,6 +4,10 @@
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/issues)
 
+<p align="center">
+  <img src="Assets/ScreenShot.png" alt="LOYA Note v5.0.0 Screenshot" width="900">
+</p>
+
 LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, update recovery, and optional local security.
 Version 5.1.0 focuses on the Notes workflow: richer Create Note formatting, modeless editing, better note search, linked-note backlinks, PDF export, themed HTML export, and more flexible `{Element}` detection.
 ## Requirements
