@@ -3,7 +3,8 @@ from pathlib import Path
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from PyQt6.QtCore import Qt,QTimer,QEvent
-from PyQt6.QtGui import QAction,QFontMetrics,QTextDocument,QColor
+from PyQt6.QtGui import QAction,QFontMetrics,QTextDocument,QColor,QPageSize
+from PyQt6.QtPrintSupport import QPrinter
 from PyQt6.QtWidgets import QWidget,QVBoxLayout,QHBoxLayout,QFrame,QLabel,QToolButton,QStackedWidget,QTableWidget,QTableWidgetItem,QHeaderView,QAbstractItemView,QComboBox,QDialog,QFileDialog,QMessageBox,QMenu,QProgressBar,QCheckBox,QApplication,QLineEdit,QInputDialog,QScrollArea,QGridLayout,QTabWidget
 from Cores.Update import GITHUB_RELEASES_API_URL as _UP_MANIFEST_URL
 from Cores.Update import OFFICIAL_SOURCE_REPO as _UP_REPO_URL
@@ -496,6 +497,9 @@ def _parse_cmd_blocks(text):
     return out
 _CMD_ANCHOR_EDIT="cmdedit:"
 _CMD_ANCHOR_DEL="cmddelete:"
+_CMD_ANCHOR_COPY="cmdcopy:"
+_CMD_IMG_PREFIX="cmdcard:"
+_CMD_TOKEN_RX=re.compile(r"(?:cmdedit:|cmddelete:|cmdcopy:|cmdcard:)([A-Za-z0-9_-]+)",re.I)
 def _decode_cmd_token(token):
     t=_norm(token)
     if not t:return {}
@@ -526,21 +530,94 @@ def _cmd_block_html(data,note_name=""):
     lines=cmd.splitlines() or [""]
     cmd_html="<br>".join(_html_escape(l) for l in lines)
     return f"&lt;C [{meta}] &gt;<br>{cmd_html}<br>&lt;/C&gt;"
+def _cmd_token_from_block(block):
+    m=_CMD_TOKEN_RX.search(block or "")
+    return m.group(1) if m else ""
+def _cmd_export_from_block(block,copy_button=True):
+    token=_cmd_token_from_block(block)
+    if not token:return block
+    data=_decode_cmd_token(token)
+    cmd=(data.get("command","") or "").rstrip()
+    if not _norm(cmd):return block
+    esc=_html_escape(cmd)
+    align=_cmd_export_align(block)
+    btn="<button type=\"button\" onclick=\"loyaCopy(this)\">Copy</button>" if copy_button else ""
+    return f"<div class=\"loya-command align-{align}\"><pre>{esc}</pre>{btn}</div>"
+def _cmd_c_from_block(block,note_name=""):
+    token=_cmd_token_from_block(block)
+    if not token:return ""
+    data=_decode_cmd_token(token)
+    return _cmd_block_html(data,note_name) if data and _norm(data.get("command","")) else ""
 def _replace_cmd_tables_with_c(html_text,note_name=""):
     if not html_text:return ""
     rx=re.compile(r"<table[^>]*>.*?</table>",re.S|re.I)
     def _rep(m):
         block=m.group(0)
-        if _CMD_ANCHOR_EDIT not in block and _CMD_ANCHOR_DEL not in block:
-            return block
-        m2=re.search(r"cmdedit:([A-Za-z0-9_-]+)",block)
-        if not m2:m2=re.search(r"cmddelete:([A-Za-z0-9_-]+)",block)
-        if not m2:return block
-        data=_decode_cmd_token(m2.group(1))
-        if not data or not _norm(data.get("command","")):return block
-        h=_cmd_block_html(data,note_name)
+        h=_cmd_c_from_block(block,note_name)
         return f"<p>{h}</p>" if h else block
-    return rx.sub(_rep,html_text)
+    out=rx.sub(_rep,html_text)
+    rxp=re.compile(r"<p\b[^>]*>.*?(?:cmdedit:|cmddelete:|cmdcopy:|cmdcard:)[A-Za-z0-9_-]+.*?</p>",re.S|re.I)
+    out=rxp.sub(lambda m:(f"<p>{_cmd_c_from_block(m.group(0),note_name)}</p>" if _cmd_c_from_block(m.group(0),note_name) else m.group(0)),out)
+    rxi=re.compile(r"<img\b[^>]*(?:cmdedit:|cmddelete:|cmdcopy:|cmdcard:)[A-Za-z0-9_-]+[^>]*>",re.S|re.I)
+    out=rxi.sub(lambda m:(f"<p>{_cmd_c_from_block(m.group(0),note_name)}</p>" if _cmd_c_from_block(m.group(0),note_name) else m.group(0)),out)
+    return out
+def _cmd_export_align(block):
+    b=(block or "").lower()
+    if "align=\"right\"" in b or "text-align: right" in b or "text-align:right" in b or ("margin-left: auto" in b and "margin-right: 0" in b):return "right"
+    if "align=\"center\"" in b or "text-align: center" in b or "text-align:center" in b or ("margin-left: auto" in b and "margin-right: auto" in b):return "center"
+    return "left"
+def _replace_cmd_tables_for_export(html_text,copy_button=True):
+    if not html_text:return ""
+    rx=re.compile(r"<table[^>]*>.*?</table>",re.S|re.I)
+    def _rep(m):
+        block=m.group(0)
+        return _cmd_export_from_block(block,copy_button)
+    out=rx.sub(_rep,html_text)
+    rxp=re.compile(r"<p\b[^>]*>.*?(?:cmdedit:|cmddelete:|cmdcopy:|cmdcard:)[A-Za-z0-9_-]+.*?</p>",re.S|re.I)
+    out=rxp.sub(lambda m:_cmd_export_from_block(m.group(0),copy_button),out)
+    rxi=re.compile(r"<img\b[^>]*(?:cmdedit:|cmddelete:|cmdcopy:|cmdcard:)[A-Za-z0-9_-]+[^>]*>",re.S|re.I)
+    out=rxi.sub(lambda m:_cmd_export_from_block(m.group(0),copy_button),out)
+    return out
+def _note_html_theme(title,group,body):
+    return "\n".join([
+        "<!DOCTYPE html>",
+        "<html>",
+        "<head>",
+        "<meta charset=\"utf-8\" />",
+        "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />",
+        f"<title>{_html_escape(title)}</title>",
+        "<style>",
+        "body{margin:0;background:#0d1117;color:#e8eef7;font-family:Segoe UI,Arial,sans-serif;line-height:1.55;}main{max-width:980px;margin:0 auto;padding:42px 22px 64px;}h1{font-size:34px;margin:0 0 8px;color:#fff;} .meta{color:#9fb3c8;margin:0 0 26px;font-weight:700}.note{background:#141b24;border:1px solid #263446;border-radius:18px;padding:26px;box-shadow:0 20px 60px rgba(0,0,0,.28)}a{color:#8ab5ff}.loya-command{display:flex;gap:10px;align-items:flex-start;margin:14px 0}.loya-command.align-center{justify-content:center}.loya-command.align-right{justify-content:flex-end}.loya-command pre{white-space:pre-wrap;word-break:break-word;margin:0;background:#08111d;border:1px solid #304663;border-radius:12px;color:#8cecff;padding:12px 14px;min-width:min(680px,70%);font-family:Consolas,Menlo,monospace}.loya-command button{background:#1d4ed8;color:#fff;border:0;border-radius:10px;padding:8px 14px;font-weight:800;cursor:pointer}.loya-command button:active{transform:translateY(1px)}table{border-collapse:collapse;max-width:100%}td,th{border:1px solid #394b63;padding:6px 8px}img{max-width:100%;height:auto}hr{border:0;border-top:1px solid #53657a;margin:18px 0}",
+        "</style>",
+        "<script>function loyaCopy(btn){var p=btn&&btn.parentElement;var pre=p?p.querySelector('pre'):null;var t=pre?pre.innerText:'';if(navigator.clipboard){navigator.clipboard.writeText(t);}else{var a=document.createElement('textarea');a.value=t;document.body.appendChild(a);a.select();document.execCommand('copy');a.remove();}btn.innerText='Copied';setTimeout(function(){btn.innerText='Copy';},900);}</script>",
+        "</head>",
+        "<body>",
+        "<main>",
+        f"<h1>{_html_escape(title)}</h1>",
+        (f"<p class=\"meta\">{_html_escape(group)}</p>" if group else ""),
+        f"<section class=\"note\">{body}</section>",
+        "</main>",
+        "</body>",
+        "</html>",
+    ])
+def _notes_pdf_html(notes):
+    parts=["<!DOCTYPE html><html><head><meta charset=\"utf-8\" /><style>body{font-family:Segoe UI,Arial,sans-serif;color:#111;line-height:1.45}h1{font-size:24px;margin:0 0 8px}.meta{color:#555;font-weight:700}.note-page{page-break-after:always}.note-page:last-child{page-break-after:auto}.loya-command{display:flex;gap:8px;align-items:flex-start;margin:10px 0}.loya-command.align-center{justify-content:center}.loya-command.align-right{justify-content:flex-end}.loya-command pre{white-space:pre-wrap;word-break:break-word;border:1px solid #bbb;background:#f5f7fb;color:#005bbb;font-weight:700;padding:8px;margin:0;font-family:Consolas,monospace}table{border-collapse:collapse}td,th{border:1px solid #bbb;padding:5px}img{max-width:100%;height:auto}</style></head><body>"]
+    for n in notes or []:
+        title=_norm(n.get("note_name","")) or "Untitled";group=_norm(n.get("group_name",""));body=_replace_cmd_tables_for_export(_extract_html_body(n.get("content","") or ""),copy_button=False)
+        parts.append(f"<section class=\"note-page\"><h1>{_html_escape(title)}</h1>"+(f"<p class=\"meta\">{_html_escape(group)}</p>" if group else "")+body+"</section>")
+    parts.append("</body></html>")
+    return "\n".join(parts)
+def _write_pdf_from_html(html_text,out_path):
+    printer=QPrinter(QPrinter.PrinterMode.HighResolution)
+    printer.setOutputFormat(QPrinter.OutputFormat.PdfFormat)
+    printer.setOutputFileName(out_path)
+    try:printer.setPageSize(QPageSize(QPageSize.PageSizeId.A4))
+    except Exception:pass
+    doc=QTextDocument()
+    doc.setHtml(html_text or "")
+    fn=getattr(doc,"print",None) or getattr(doc,"print_",None)
+    if not callable(fn):raise RuntimeError("PDF printing is not available.")
+    fn(printer)
 def _sync_note_commands(cur,note_id,note_name,html_text,now,cmd_blocks=None):
     if isinstance(cmd_blocks,list):cmds=cmd_blocks
     else:
@@ -1135,22 +1212,24 @@ class Note_LOYA_Database:
         if not note:raise RuntimeError("Note not found.")
         title=_norm(note.get("note_name","")) or "Untitled"
         group=_norm(note.get("group_name",""))
-        body=_extract_html_body(note.get("content","") or "")
-        doc=[
-            "<!DOCTYPE html>",
-            "<html>",
-            "<head>",
-            "<meta charset=\"utf-8\" />",
-            f"<title>{_html_escape(title)}</title>",
-            "</head>",
-            "<body>",
-            f"<h1>{_html_escape(title)}</h1>",
-            (f"<p><strong>Group:</strong> {_html_escape(group)}</p>" if group else ""),
-            body,
-            "</body>",
-            "</html>",
-        ]
-        with open(out_path,"w",encoding="utf-8") as f:f.write("\n".join(doc))
+        body=_replace_cmd_tables_for_export(_extract_html_body(note.get("content","") or ""))
+        with open(out_path,"w",encoding="utf-8") as f:f.write(_note_html_theme(title,group,body))
+    def export_note_pdf(self,note_name,out_path):
+        self.ensure()
+        note=self.read_note_by_name(note_name)
+        if not note:raise RuntimeError("Note not found.")
+        _write_pdf_from_html(_notes_pdf_html([note]),out_path)
+    def export_notes_pdf(self,out_path,progress=None):
+        self.ensure()
+        con=self.connect();con.row_factory=sqlite3.Row;cur=con.cursor()
+        cols=set(self.table_cols("Notes"))
+        cur.execute("SELECT id,note_name"+(",group_name" if "group_name" in cols else "")+",content FROM Notes ORDER BY id ASC")
+        notes=[dict(r) for r in cur.fetchall()]
+        con.close()
+        if not notes:raise RuntimeError("No notes found.")
+        if progress:_set_prog(progress,60,"Rendering PDF ...")
+        _write_pdf_from_html(_notes_pdf_html(notes),out_path)
+        if progress:_set_prog(progress,100,"Done.")
     def copy_db(self,out_path):
         self.ensure()
         shutil.copy2(self.path,out_path)
@@ -1983,6 +2062,8 @@ class NCN_Export:
                 self.db.export_json_tables(out_path,progress=prog)
             elif kind=="md":
                 self.db.export_markdown_zip(out_path,progress=prog)
+            elif kind=="pdf":
+                self.db.export_notes_pdf(out_path,progress=prog)
             else:
                 self.db.export_csv_zip(out_path,progress=prog)
             _log("[+]",f"NCN export ok ({kind}) -> {out_path}")
@@ -2685,8 +2766,8 @@ class _ImportExportPage(QWidget):
         export_box,ev=self._make_tab()
         self.btn_all_exp=self._button(export_box,"Export","TargetAddBtn",self._export_all)
         ev.addLayout(self._make_row(export_box,"Export All",self.btn_all_exp));ev.addWidget(self._make_status("all",export_box),0)
-        self.btn_ncn_exp=self._menu_button(export_box,"All Notes","TargetMiniBtn",[("Database (.db)",lambda:self._ncn_export("db")),("JSON (.json)",lambda:self._ncn_export("json")),("CSV ZIP (.zip)",lambda:self._ncn_export("csv")),("Markdown ZIP (.zip)",lambda:self._ncn_export("md"))])
-        self.btn_note_exp=self._menu_button(export_box,"One Note","TargetMiniBtn",[("Markdown (.md)",lambda:self._notes_export("md")),("Human Markdown (.md)",lambda:self._notes_export("md_human")),("HTML (.html)",lambda:self._notes_export("html"))])
+        self.btn_ncn_exp=self._menu_button(export_box,"All Notes","TargetMiniBtn",[("Database (.db)",lambda:self._ncn_export("db")),("JSON (.json)",lambda:self._ncn_export("json")),("CSV ZIP (.zip)",lambda:self._ncn_export("csv")),("Markdown ZIP (.zip)",lambda:self._ncn_export("md")),("PDF (.pdf)",lambda:self._ncn_export("pdf"))])
+        self.btn_note_exp=self._menu_button(export_box,"One Note","TargetMiniBtn",[("Markdown (.md)",lambda:self._notes_export("md")),("Human Markdown (.md)",lambda:self._notes_export("md_human")),("HTML (.html)",lambda:self._notes_export("html")),("PDF (.pdf)",lambda:self._notes_export("pdf"))])
         ev.addLayout(self._make_row(export_box,"Export Notes",self.btn_ncn_exp,self.btn_note_exp));ev.addWidget(self._make_status("ncn",export_box),0);ev.addWidget(self._make_status("note",export_box),0)
         self.btn_cmd_exp=self._menu_button(export_box,"Export","TargetMiniBtn",[("Markdown (.md)",lambda:self._commands_export("md")),("JSON (.json)",lambda:self._commands_export("json")),("CSV (.csv)",lambda:self._commands_export("csv"))])
         ev.addLayout(self._make_row(export_box,"Export Commands (Notes DB)",self.btn_cmd_exp));ev.addWidget(self._make_status("cmd",export_box),0)
@@ -2748,7 +2829,7 @@ class _ImportExportPage(QWidget):
         r.addWidget(frame,1)
         return r
     def _row_meta(self,title):
-        return {"Export All":"Data ZIP","Export Notes":"DB / JSON / CSV ZIP / MD ZIP / one-note MD / HTML","Export Commands (Notes DB)":"MD / JSON / CSV","Export Target Values":"JSON / CSV","Export Targets":"JSON / CSV","Import All":"Data ZIP","Import Notes":"DB / JSON / CSV bundle / structured MD / human MD","Import Commands (Notes DB)":"MD / JSON / CSV","Import Target Values":"JSON / CSV","Import Targets":"JSON / CSV","Notes Template":"MD / JSON / DB","Commands Template":"MD / JSON","Target Values Template":"JSON / CSV","Targets Template":"JSON / CSV","All Human Templates":"ZIP bundle","Notes AI Template":"AI MD","Commands AI Template":"AI MD","Target Values AI Template":"AI MD","Targets AI Template":"AI MD","All AI Templates":"ZIP bundle"}.get(title,"")
+        return {"Export All":"Data ZIP","Export Notes":"DB / JSON / CSV ZIP / MD ZIP / PDF / one-note MD / HTML / PDF","Export Commands (Notes DB)":"MD / JSON / CSV","Export Target Values":"JSON / CSV","Export Targets":"JSON / CSV","Import All":"Data ZIP","Import Notes":"DB / JSON / CSV bundle / structured MD / human MD","Import Commands (Notes DB)":"MD / JSON / CSV","Import Target Values":"JSON / CSV","Import Targets":"JSON / CSV","Notes Template":"MD / JSON / DB","Commands Template":"MD / JSON","Target Values Template":"JSON / CSV","Targets Template":"JSON / CSV","All Human Templates":"ZIP bundle","Notes AI Template":"AI MD","Commands AI Template":"AI MD","Target Values AI Template":"AI MD","Targets AI Template":"AI MD","All AI Templates":"ZIP bundle"}.get(title,"")
     def _button(self,parent,text,obj,fn=None):
         btn=QToolButton(parent);btn.setObjectName(obj);btn.setText(text);btn.setCursor(Qt.CursorShape.PointingHandCursor);btn.setMinimumWidth(82)
         if callable(fn):btn.clicked.connect(fn)
@@ -2865,6 +2946,8 @@ class _ImportExportPage(QWidget):
             p,_=QFileDialog.getSaveFileName(self,"Export JSON",os.path.join(base,f"Note_LOYA_export_{_now()}.json"),"JSON (*.json)")
         elif kind=="md":
             p,_=QFileDialog.getSaveFileName(self,"Export Markdown",os.path.join(base,f"Note_LOYA_export_{_now()}.zip"),"ZIP (*.zip)")
+        elif kind=="pdf":
+            p,_=QFileDialog.getSaveFileName(self,"Export Notes PDF",os.path.join(base,f"LOYA_Notes_{_now()}.pdf"),"PDF (*.pdf)")
         else:
             p,_=QFileDialog.getSaveFileName(self,"Export CSV",os.path.join(base,f"Note_LOYA_export_{_now()}.zip"),"ZIP (*.zip)")
         if not p:return
@@ -3119,6 +3202,17 @@ class _ImportExportPage(QWidget):
             except Exception as e:
                 self._set_ie_status("note",f"Export failed: {e}")
                 _log("[!]",f"Note export html failed ({e})")
+                QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
+        elif kind=="pdf":
+            p,_=QFileDialog.getSaveFileName(self,"Export Note (PDF)",os.path.join(base,f"{safe}.pdf"),"PDF (*.pdf)")
+            if not p:return
+            try:
+                self.db.export_note_pdf(name,p)
+                self._set_ie_status("note",f"Exported: {os.path.basename(p)}")
+                _log("[+]",f"Note export pdf -> {p}")
+            except Exception as e:
+                self._set_ie_status("note",f"Export failed: {e}")
+                _log("[!]",f"Note export pdf failed ({e})")
                 QMessageBox.warning(self,"Export",f"Export failed:\n{e}")
     def _tv_import(self,kind):
         flt={"json":"JSON (*.json)","csv":"CSV (*.csv)"}[kind]

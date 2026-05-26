@@ -486,6 +486,15 @@ QToolButton#CmdCardCopy:hover{background:#59152a46;border:1px solid #99c7ffff;co
 QToolButton#CmdCardBtn,QToolButton#CmdCardDelete{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;font-weight:900;min-height:30px;max-height:30px;padding:0 12px}
 QToolButton#CmdCardBtn:hover,QToolButton#CmdCardDelete:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
 QToolButton#CmdCardDelete{color:#ffd6df;min-width:34px;max-width:34px;padding:0}
+QFrame#FmtColorWrap,QFrame#FmtStepBox,QFrame#NoteNavHeader,QFrame#NoteLinkedFrom,QFrame#MiniQuickSearch{background:transparent;border:0}
+QToolButton#FmtColor,QToolButton#FmtHighlight,QToolButton#FmtAlignLeft,QToolButton#FmtAlignCenter,QToolButton#FmtAlignRight,QToolButton#FmtFontStep{background:#59152a46;border:1px solid #667fbfff;border-radius:12px;color:#ffffff;min-width:42px;max-width:42px;min-height:42px;max-height:42px;padding:0}
+QToolButton#FmtColor:hover,QToolButton#FmtHighlight:hover,QToolButton#FmtAlignLeft:hover,QToolButton#FmtAlignCenter:hover,QToolButton#FmtAlignRight:hover,QToolButton#FmtFontStep:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
+QFrame#FmtColorLine,QFrame#FmtHighlightLine{border:0;border-radius:2px;min-height:3px;max-height:3px}
+QFrame#ColorPreview{background:#ffffff;border:1px solid #99c7ffff;border-radius:10px}
+QWidget#ColorSpectrum{background:#180d1c66;border:1px solid #667fbfff;border-radius:12px}
+QFrame#ColorPreviewBox{background:#33152a46;border:1px solid #40667fbf;border-radius:12px}
+QSpinBox#FmtColorSpin{min-width:72px;max-width:96px}
+QFrame#NoteLinkedFrom QToolButton#NoteNavChildBtn{min-height:28px;max-height:28px;padding:0 10px;border-radius:10px}
 QFrame#AppTitleBar{background:#73101b2f;border:1px solid #4d78aaff;border-radius:14px}
 QLabel#AppTitleIcon{background:transparent;border:0}
 QLabel#AppTitleText{background:transparent;border:0;color:#ffffff;font-weight:900;font-size:13px}

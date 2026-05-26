@@ -46,8 +46,8 @@ def _clamp_u16(n):
     return n
 _SETTINGS_CACHE=None
 _SETTINGS_MTIME=None
-_KEY_RE_STRICT=re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
-_KEY_RE_EXT=re.compile(r"^[A-Za-z_][A-Za-z0-9_\-.:]*$")
+_KEY_RE_STRICT=re.compile(r"^[^{}\r\n]+$")
+_KEY_RE_EXT=re.compile(r"^[^{}\r\n]+$")
 def _settings_path():
     return _health_check.settings_path()
 def _read_settings():
@@ -101,10 +101,24 @@ def _set_allow_dots_colons(val):
     s["targets"]=t
     return _write_settings(s)
 def _is_valid_key(k):
+    k=_norm(k)
     if not k:return False
-    rx=_KEY_RE_EXT if _allow_dots_colons() else _KEY_RE_STRICT
-    if not rx.match(k):return False
-    return any(ch.isalpha() for ch in k)
+    return bool(_KEY_RE_EXT.fullmatch(k))
+def _iter_brace_keys(text):
+    t=html.unescape(str(text or ""))
+    i=0;n=len(t)
+    while i<n:
+        if t[i]!="{":
+            i+=1;continue
+        start=i;j=i+1;bad=False
+        while j<n and t[j]!="}":
+            if t[j] in "{\r\n":bad=True
+            j+=1
+        if j>=n:break
+        if not bad:
+            raw=_norm(t[start+1:j])
+            if raw:yield raw
+        i=j+1
 class _InlineEditDelegate(QStyledItemDelegate):
     def createEditor(self,parent,option,index):
         ed=QLineEdit(parent);ed.setObjectName("TargetCellEdit");ed.setFrame(False)
@@ -128,9 +142,7 @@ def _table_cols(cur,t):
 def _extract_keys_from_text(text):
     out=[]
     if not text:return out
-    raw=html.unescape(str(text))
-    for m in re.finditer(r"\{([^{}\r\n]+)\}",raw):
-        k=_norm(m.group(1))
+    for k in _iter_brace_keys(text):
         if k and _is_valid_key(k):out.append(k)
     return out
 def _extract_keys_from_db(dbp):
@@ -1107,7 +1119,7 @@ class Widget(QWidget):
         lv=QVBoxLayout(left);lv.setContentsMargins(10,10,10,10);lv.setSpacing(10)
         self.key_filter=QLineEdit(left);self.key_filter.setObjectName("TargetKeyFilter");self.key_filter.setPlaceholderText("Search for Key Element")
         self.key_filter.textChanged.connect(self._render_keys)
-        self.key_pattern_toggle=QCheckBox("Allow dots/colons in keys",left)
+        self.key_pattern_toggle=QCheckBox("Accept spaces and symbols in keys",left)
         self.key_pattern_toggle.setObjectName("TargetKeyPatternToggle")
         self.key_pattern_toggle.setChecked(_allow_dots_colons())
         self.key_pattern_toggle.toggled.connect(self._toggle_key_pattern)

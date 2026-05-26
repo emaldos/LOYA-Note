@@ -260,8 +260,8 @@ def _clamp_u16(n):
     return n
 _SETTINGS_CACHE=None
 _SETTINGS_MTIME=None
-_KEY_RE_STRICT=re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
-_KEY_RE_EXT=re.compile(r"^[A-Za-z_][A-Za-z0-9_\-.:]*$")
+_KEY_RE_STRICT=re.compile(r"^[^{}\r\n]+$")
+_KEY_RE_EXT=re.compile(r"^[^{}\r\n]+$")
 _CMD_BOX_CMD_MIN_H=72
 _CMD_BOX_CMD_DEFAULT_H=86
 _CMD_BOX_CMD_MAX_H=180
@@ -352,6 +352,29 @@ def _set_note_ref_color_setting(hexv):
     if hexv:s["note_ref_color"]=hexv
     else:s.pop("note_ref_color",None)
     _write_settings(s)
+def _note_text_color():
+    s=_read_settings()
+    c=_norm_hex_color(s.get("note_text_color","") if isinstance(s,dict) else "")
+    return c or "#ffffff"
+def _set_note_text_color_setting(hexv):
+    s=_read_settings()
+    if not isinstance(s,dict):s={}
+    c=_norm_hex_color(hexv) or "#ffffff"
+    s["note_text_color"]=c
+    _write_settings(s)
+def _note_highlight_color():
+    s=_read_settings()
+    c=_norm_hex_color(s.get("note_highlight_color","") if isinstance(s,dict) else "")
+    return c or "#fff3bf"
+def _set_note_highlight_color_setting(hexv):
+    s=_read_settings()
+    if not isinstance(s,dict):s={}
+    c=_norm_hex_color(hexv) or "#fff3bf"
+    s["note_highlight_color"]=c
+    _write_settings(s)
+def _draft_recovery_path():
+    d=_abs("..","Data");os.makedirs(d,exist_ok=True)
+    return os.path.join(d,"note_draft_recovery.json")
 
 def _iter_note_refs(text):
     t=text or ""
@@ -371,10 +394,24 @@ def _allow_dots_colons():
     t=s.get("targets",{}) if isinstance(s,dict) else {}
     return bool(t.get("allow_dots_colons",False))
 def _is_valid_key(k):
+    k=_norm(k)
     if not k:return False
-    rx=_KEY_RE_EXT if _allow_dots_colons() else _KEY_RE_STRICT
-    if not rx.match(k):return False
-    return any(ch.isalpha() for ch in k)
+    return bool(_KEY_RE_EXT.fullmatch(k))
+def _iter_brace_keys(text):
+    t=html.unescape(str(text or ""))
+    i=0;n=len(t)
+    while i<n:
+        if t[i]!="{":
+            i+=1;continue
+        start=i;j=i+1;bad=False
+        while j<n and t[j]!="}":
+            if t[j] in "{\r\n":bad=True
+            j+=1
+        if j>=n:break
+        if not bad:
+            raw=_norm(t[start+1:j])
+            if raw:yield start,j+1,raw
+        i=j+1
 def _load_target_priorities():
     p=_targets_values_path()
     exists=os.path.isfile(p)
@@ -438,9 +475,7 @@ def _target_keys_from_text(text):
     keys=[]
     seen=set()
     if not text:return keys
-    raw=html.unescape(str(text))
-    for m in re.finditer(r"\{([^{}\r\n]+)\}",raw):
-        k=_norm(m.group(1))
+    for _,_,k in _iter_brace_keys(text):
         if not k or not _is_valid_key(k):continue
         lk=k.lower()
         if lk in seen:continue
@@ -884,6 +919,10 @@ class _CreateNoteDialog(QDialog):
         super().__init__(parent)
         self.setObjectName("NoteAddDialog")
         self.setWindowTitle("Create Note")
+        self.setWindowFlags(Qt.WindowType.Window|Qt.WindowType.WindowMinimizeButtonHint|Qt.WindowType.WindowMaximizeButtonHint|Qt.WindowType.WindowCloseButtonHint)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setModal(False)
+        self.setSizeGripEnabled(True)
         self.resize(980,720)
         ico=_abs("..","Assets","logox.png")
         if os.path.isfile(ico):self.setWindowIcon(QIcon(ico))
@@ -907,6 +946,162 @@ class _CreateNoteDialog(QDialog):
             pass
         try:super().closeEvent(e)
         except Exception:pass
+class _ColorSpectrum(QWidget):
+    colorChanged=pyqtSignal(str)
+    def __init__(self,parent=None):
+        super().__init__(parent)
+        self.setObjectName("ColorSpectrum")
+        self.setMinimumSize(300,190)
+        self._h=0;self._s=255;self._v=255
+        self.setMouseTracking(True)
+    def _areas(self):
+        w=max(80,self.width());h=max(80,self.height());sw=18;gap=10
+        return QRect(0,0,max(40,w-sw-gap),h),QRect(w-sw,0,sw,h)
+    def color(self):
+        return QColor.fromHsv(int(self._h),int(self._s),int(self._v)).name()
+    def setColor(self,color,emit=False):
+        c=QColor(_norm_hex_color(color) or "#ffffff")
+        if not c.isValid():c=QColor("#ffffff")
+        h,s,v,_=c.getHsv()
+        self._h=int(h if h>=0 else self._h);self._s=int(max(0,s));self._v=int(max(0,v))
+        self.update()
+        if emit:self.colorChanged.emit(self.color())
+    def paintEvent(self,e):
+        p=QPainter(self);area,strip=self._areas()
+        img=QImage(area.width(),area.height(),QImage.Format.Format_RGB32)
+        aw=max(1,area.width()-1);ah=max(1,area.height()-1)
+        for y in range(area.height()):
+            v=255-int((y*255)/ah)
+            for x in range(area.width()):
+                s=int((x*255)/aw)
+                img.setPixelColor(x,y,QColor.fromHsv(int(self._h),s,v))
+        p.drawImage(area.topLeft(),img)
+        himg=QImage(strip.width(),strip.height(),QImage.Format.Format_RGB32)
+        hh=max(1,strip.height()-1)
+        for y in range(strip.height()):
+            h=int((y*359)/hh)
+            col=QColor.fromHsv(h,255,255)
+            for x in range(strip.width()):himg.setPixelColor(x,y,col)
+        p.drawImage(strip.topLeft(),himg)
+        p.setPen(QPen(QColor("#99c7ff"),1));p.drawRect(area.adjusted(0,0,-1,-1));p.drawRect(strip.adjusted(0,0,-1,-1))
+        x=area.left()+int((self._s/255)*max(1,area.width()-1));y=area.top()+int(((255-self._v)/255)*max(1,area.height()-1))
+        p.setPen(QPen(QColor("#000000"),3));p.drawEllipse(x-5,y-5,10,10)
+        p.setPen(QPen(QColor("#ffffff"),1));p.drawEllipse(x-5,y-5,10,10)
+        hy=strip.top()+int((self._h/359)*max(1,strip.height()-1))
+        p.setPen(QPen(QColor("#ffffff"),2));p.drawLine(strip.left()-3,hy,strip.right()+3,hy)
+    def _event_pos(self,e):
+        try:return e.position().toPoint()
+        except Exception:return e.pos()
+    def _pick(self,pos):
+        area,strip=self._areas()
+        if area.contains(pos):
+            self._s=max(0,min(255,int(((pos.x()-area.left())*255)/max(1,area.width()-1))))
+            self._v=max(0,min(255,255-int(((pos.y()-area.top())*255)/max(1,area.height()-1))))
+        elif strip.contains(pos):
+            self._h=max(0,min(359,int(((pos.y()-strip.top())*359)/max(1,strip.height()-1))))
+        else:return
+        self.update();self.colorChanged.emit(self.color())
+    def mousePressEvent(self,e):
+        if e.button()==Qt.MouseButton.LeftButton:self._pick(self._event_pos(e))
+    def mouseMoveEvent(self,e):
+        if e.buttons()&Qt.MouseButton.LeftButton:self._pick(self._event_pos(e))
+class _ColorPickerDlg(QDialog):
+    def __init__(self,parent,title,initial="#ffffff"):
+        super().__init__(parent)
+        self.setObjectName("NoteAddDialog")
+        self.setWindowTitle(title)
+        self._syncing=False
+        self._initial=_norm_hex_color(initial) or "#ffffff"
+        self._color=self._initial
+        self.resize(620,500)
+        ico=_abs("..","Assets","logox.png")
+        if os.path.isfile(ico):self.setWindowIcon(QIcon(ico))
+        root=QVBoxLayout(self);root.setContentsMargins(14,14,14,14);root.setSpacing(10)
+        box=QFrame(self);box.setObjectName("NoteAddFrame")
+        v=QVBoxLayout(box);v.setContentsMargins(12,12,12,12);v.setSpacing(10)
+        self.tabs=QTabWidget(box);self.tabs.setObjectName("TargetTabs")
+        self.theme_page=QWidget(self.tabs);self.theme_page.setObjectName("Page")
+        self.custom_page=QWidget(self.tabs);self.custom_page.setObjectName("Page")
+        self.tabs.addTab(self.theme_page,"Theme Colors")
+        self.tabs.addTab(self.custom_page,"Custom")
+        self._build_theme_tab()
+        cvroot=QVBoxLayout(self.custom_page);cvroot.setContentsMargins(0,0,0,0);cvroot.setSpacing(10)
+        self.spectrum=_ColorSpectrum(self.custom_page);self.spectrum.colorChanged.connect(self._spectrum_changed)
+        previews=QHBoxLayout();previews.setContentsMargins(0,0,0,0);previews.setSpacing(10)
+        cur_box=QFrame(self.custom_page);cur_box.setObjectName("ColorPreviewBox");cv=QVBoxLayout(cur_box);cv.setContentsMargins(8,8,8,8);cv.setSpacing(6)
+        new_box=QFrame(self.custom_page);new_box.setObjectName("ColorPreviewBox");nv=QVBoxLayout(new_box);nv.setContentsMargins(8,8,8,8);nv.setSpacing(6)
+        self.current_preview=QFrame(cur_box);self.current_preview.setObjectName("ColorPreview");self.current_preview.setFixedHeight(34)
+        self.new_preview=QFrame(new_box);self.new_preview.setObjectName("ColorPreview");self.new_preview.setFixedHeight(34)
+        cv.addWidget(QLabel("Current color",cur_box),0);cv.addWidget(self.current_preview,0)
+        nv.addWidget(QLabel("New selected color",new_box),0);nv.addWidget(self.new_preview,0)
+        previews.addWidget(cur_box,1);previews.addWidget(new_box,1)
+        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(8);grid.setVerticalSpacing(8)
+        self.r=QSpinBox(self.custom_page);self.g=QSpinBox(self.custom_page);self.b=QSpinBox(self.custom_page)
+        for s in (self.r,self.g,self.b):
+            s.setRange(0,255);s.setObjectName("FmtColorSpin");s.valueChanged.connect(self._rgb_changed)
+        self.hex=QLineEdit(self.custom_page);self.hex.setObjectName("NoteName");self.hex.setPlaceholderText("#ffffff");self.hex.textChanged.connect(self._hex_changed)
+        grid.addWidget(QLabel("R",self.custom_page),0,0);grid.addWidget(self.r,0,1);grid.addWidget(QLabel("G",self.custom_page),0,2);grid.addWidget(self.g,0,3);grid.addWidget(QLabel("B",self.custom_page),0,4);grid.addWidget(self.b,0,5)
+        grid.addWidget(QLabel("HEX",self.custom_page),1,0);grid.addWidget(self.hex,1,1,1,5)
+        cvroot.addWidget(self.spectrum,1);cvroot.addLayout(previews);cvroot.addLayout(grid)
+        btns=QHBoxLayout();btns.setContentsMargins(0,0,0,0);btns.setSpacing(8)
+        ok=QToolButton(box);ok.setObjectName("CmdBoxInsert");ok.setText("OK");ok.setCursor(Qt.CursorShape.PointingHandCursor)
+        cancel=QToolButton(box);cancel.setObjectName("CmdBoxCancel");cancel.setText("Cancel");cancel.setCursor(Qt.CursorShape.PointingHandCursor)
+        ok.clicked.connect(self.accept);cancel.clicked.connect(self.reject)
+        btns.addStretch(1);btns.addWidget(ok,0);btns.addWidget(cancel,0)
+        v.addWidget(self.tabs,1);v.addLayout(btns)
+        root.addWidget(box,1)
+        self.current_preview.setStyleSheet(f"QFrame#ColorPreview{{background:{self._initial};border:1px solid #99c7ff;border-radius:10px;}}")
+        self._set_color(self._color,True)
+    def _theme_palette(self):
+        return [
+            ("White",["#FFFFFF","#F2F2F2","#D9D9D9","#BFBFBF","#A6A6A6","#808080"]),
+            ("Black",["#000000","#262626","#404040","#595959","#737373","#A6A6A6"]),
+            ("Gray",["#808080","#F2F2F2","#D9D9D9","#BFBFBF","#666666","#404040"]),
+            ("Dark blue",["#1F4E79","#DDEBF7","#BDD7EE","#5B9BD5","#2E75B6","#17365D"]),
+            ("Blue",["#4472C4","#D9EAF7","#B4C7E7","#8EAADB","#2F5597","#1F3864"]),
+            ("Orange",["#ED7D31","#FCE4D6","#F8CBAD","#F4B183","#C65911","#833C0C"]),
+            ("Yellow",["#FFC000","#FFF2CC","#FFE699","#FFD966","#BF9000","#806000"]),
+            ("Light blue",["#5B9BD5","#DDEBF7","#B4C6E7","#9DC3E6","#2F75B5","#1F4E79"]),
+            ("Green",["#70AD47","#E2F0D9","#C6E0B4","#A9D18E","#548235","#375623"]),
+        ]
+    def _build_theme_tab(self):
+        root=QVBoxLayout(self.theme_page);root.setContentsMargins(10,10,10,10);root.setSpacing(10)
+        title=QLabel("Theme Colors",self.theme_page);title.setObjectName("TargetFormTitle")
+        root.addWidget(title,0)
+        grid=QGridLayout();grid.setContentsMargins(0,0,0,0);grid.setHorizontalSpacing(7);grid.setVerticalSpacing(7)
+        for col,(name,colors) in enumerate(self._theme_palette()):
+            for row,color in enumerate(colors):
+                btn=QToolButton(self.theme_page);btn.setObjectName("ThemeColorCell");btn.setCursor(Qt.CursorShape.PointingHandCursor);btn.setFixedSize(28,28);btn.setToolTip(f"{name} {color}");btn.setStyleSheet(f"QToolButton#ThemeColorCell{{background:{color};border:1px solid #99c7ff;border-radius:4px;}}QToolButton#ThemeColorCell:hover{{border:2px solid #ffffff;}}")
+                btn.clicked.connect(lambda checked=False,c=color:self._theme_pick(c))
+                grid.addWidget(btn,row,col)
+        root.addLayout(grid);root.addStretch(1)
+    def _theme_pick(self,color):
+        self._set_color(color,True);self.accept()
+    def _hex_out(self,color):
+        c=_norm_hex_color(color) or "#ffffff"
+        return "#"+c.lstrip("#").upper()
+    def _set_color(self,color,update_spectrum=False):
+        c=self._hex_out(color)
+        self._color=c
+        h=c.lstrip("#")
+        self._syncing=True
+        try:
+            self.r.setValue(int(h[0:2],16));self.g.setValue(int(h[2:4],16));self.b.setValue(int(h[4:6],16));self.hex.setText(c)
+        finally:
+            self._syncing=False
+        if update_spectrum:self.spectrum.setColor(c,False)
+        self.new_preview.setStyleSheet(f"QFrame#ColorPreview{{background:{c};border:1px solid #99c7ff;border-radius:10px;}}")
+    def _spectrum_changed(self,color):
+        if self._syncing:return
+        self._set_color(color,False)
+    def _rgb_changed(self,*a):
+        if self._syncing:return
+        self._set_color(f"#{self.r.value():02x}{self.g.value():02x}{self.b.value():02x}",True)
+    def _hex_changed(self,t):
+        if self._syncing:return
+        c=_norm_hex_color(t)
+        if c:self._set_color(c,True)
+    def color(self):return self._color
 class _NoteLinkDlg(QDialog):
     def __init__(self,parent,notes,title_value="",note_value="",color_value=""):
         super().__init__(parent)
@@ -1135,8 +1330,7 @@ class _PlaceholderHighlighter(QSyntaxHighlighter):
         self.rehighlight()
     def highlightBlock(self,text):
         if not text:return
-        for m in re.finditer(r"\{([^{}\r\n]+)\}",text):
-            raw=_norm(m.group(1))
+        for start,end,raw in _iter_brace_keys(text):
             if not raw:continue
             if not _is_valid_key(raw):
                 fmt=self._fmt_bad
@@ -1144,7 +1338,7 @@ class _PlaceholderHighlighter(QSyntaxHighlighter):
                 fmt=self._fmt_ok
             else:
                 fmt=self._fmt_unknown
-            self.setFormat(m.start(),m.end()-m.start(),fmt)
+            self.setFormat(start,end-start,fmt)
         for _,start,end in _iter_note_refs(text):
             self.setFormat(start,end-start,self._ref_fmt)
 class _PlaceholderCompleter(QObject):
@@ -1182,8 +1376,9 @@ class _PlaceholderCompleter(QObject):
         if last_open<0:return None
         last_close=left.rfind("}")
         if last_close>last_open:return None
+        if "{" in (left[last_close+1:last_open] if last_close>=0 else left[:last_open]):return None
         prefix=left[last_open+1:]
-        if not re.match(r"^[A-Za-z0-9_.:-]*$",prefix):return None
+        if re.search(r"[{}\r\n]",prefix):return None
         return prefix,last_open+1
     def _show(self):
         ctx=self._brace_context()
@@ -1314,8 +1509,9 @@ class _CmdElementSuggest(QObject):
         if last_open<0:return None
         last_close=left.rfind("}")
         if last_close>last_open:return None
+        if "{" in (left[last_close+1:last_open] if last_close>=0 else left[:last_open]):return None
         prefix=left[last_open+1:]
-        if not re.match(r"^[A-Za-z0-9_.:-]*$",prefix):return None
+        if re.search(r"[{}\r\n]",prefix):return None
         return prefix,last_open+1,pos
     def _rows(self,prefix):
         try:return list(self._row_fn(prefix,3) or [])
@@ -1561,7 +1757,7 @@ class _CmdPickerDlg(QDialog):
     def selected(self):
         return self._selected
 class NoteEdit(QTextEdit):
-    def __init__(self,on_add_cmd,on_enter,on_cmd_anchor=None,is_cmd_table=None,on_note_ref=None,on_note_link=None,on_note_link_edit=None,parent=None):
+    def __init__(self,on_add_cmd,on_enter,on_cmd_anchor=None,is_cmd_table=None,on_note_ref=None,on_note_link=None,on_note_link_edit=None,on_pick_cmd=None,on_insert_note_link=None,on_add_line=None,parent=None):
         super().__init__(parent)
         self._on_add_cmd=on_add_cmd
         self._on_enter=on_enter
@@ -1569,6 +1765,9 @@ class NoteEdit(QTextEdit):
         self._on_note_ref=on_note_ref
         self._on_note_link=on_note_link
         self._on_note_link_edit=on_note_link_edit
+        self._on_pick_cmd=on_pick_cmd
+        self._on_insert_note_link=on_insert_note_link
+        self._on_add_line=on_add_line
         self._is_cmd_table=is_cmd_table if callable(is_cmd_table) else (lambda _t: False)
         self._img_resize_active=False
         self._img_resize_pos=None
@@ -1701,6 +1900,13 @@ class NoteEdit(QTextEdit):
         m.addSeparator()
         a=m.addAction("Add Command Here")
         a.triggered.connect(lambda:self._on_add_cmd(True))
+        p=m.addAction("Pick Command")
+        p.triggered.connect(lambda:self._on_pick_cmd() if callable(self._on_pick_cmd) else None)
+        l=m.addAction("Link Note")
+        l.triggered.connect(lambda:self._on_insert_note_link() if callable(self._on_insert_note_link) else None)
+        m.addSeparator()
+        hr=m.addAction("Add Line")
+        hr.triggered.connect(lambda:self._on_add_line() if callable(self._on_add_line) else None)
         m.exec(e.globalPos())
     def _copy_cmd_table(self,table):
         if not table:return
@@ -2422,6 +2628,9 @@ class Widget(QWidget):
         self._placeholder_keys=set()
         self._placeholder_key_list=[]
         self._targets_mtime=None
+        self._nav_matches=[];self._nav_match_index=-1;self._nav_current_note=None
+        self._nav_search_go_timer=None
+        self._draft_recovery_checked=False;self._loading_draft=False
         meta=_load_notes_meta()
         self._pinned=list(meta.get("pinned",[]))
         self._recent=list(meta.get("recent",[]))
@@ -2464,6 +2673,9 @@ class Widget(QWidget):
         th.addWidget(self._toast_msg,1)
         self._placeholder_timer=QTimer(self);self._placeholder_timer.setSingleShot(True)
         self._placeholder_timer.timeout.connect(self._update_placeholder_helper)
+        self._draft_timer=QTimer(self);self._draft_timer.setSingleShot(True);self._draft_timer.setInterval(1000)
+        self._draft_timer.timeout.connect(self._save_draft_recovery)
+        QTimer.singleShot(500,self._maybe_offer_draft_recovery)
         _log("[+]",f"Note ready db={os.path.basename(self._dbp)}")
     def _build_create(self):
         v=QVBoxLayout(self.tab_create);v.setContentsMargins(0,0,0,0);v.setSpacing(6)
@@ -2486,6 +2698,7 @@ class Widget(QWidget):
         self.btn_pick.clicked.connect(self._open_cmd_picker)
         self.btn_clear.clicked.connect(self._clear_note)
         self.btn_save.clicked.connect(lambda:self._save_note(True))
+        QShortcut(QKeySequence("Ctrl+S"),self.tab_create,activated=lambda:self._save_note(False))
         top.addWidget(self.in_name,1);top.addWidget(self.in_group,1);top.addWidget(self.btn_add,0);top.addWidget(self.btn_pick,0);top.addWidget(self.btn_link,0);top.addWidget(self.btn_save,0)
         bar=QFrame(self.tab_create);bar.setObjectName("NoteBar")
         bh=QHBoxLayout(bar);bh.setContentsMargins(14,6,14,6);bh.setSpacing(8)
@@ -2501,26 +2714,35 @@ class Widget(QWidget):
         self.font_size.setCurrentText(str(int(_DEFAULT_FONT_SIZE)))
         try:self.font_size.lineEdit().setMaxLength(3)
         except Exception:pass
-        self.btn_color=QToolButton(bar);self.btn_color.setObjectName("FmtColor");self.btn_color.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_color.setText("Color")
-        self.btn_color.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        cm=QMenu(self.btn_color)
-        for name,hexv in (("Default",None),("White","#ffffff"),("Blue","#4dabf7"),("Green","#8ce99a"),("Yellow","#ffd43b"),("Orange","#ff922b"),("Red","#ff6b6b"),("Purple","#b197fc")):
-            a=QAction(name,self.btn_color);a.triggered.connect(lambda chk=False,v=hexv:self._set_text_color(v));cm.addAction(a)
-        self.btn_color.setMenu(cm)
-        self.btn_ref_color=QToolButton(bar);self.btn_ref_color.setObjectName("FmtRefColor");self.btn_ref_color.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_ref_color.setText("Ref Color")
-        self.btn_ref_color.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
-        rm=QMenu(self.btn_ref_color)
-        for name,hexv in (("Default",None),("Light Purple","#b197fc"),("Blue","#4dabf7"),("Green","#8ce99a"),("Yellow","#ffd43b"),("Orange","#ff922b"),("Red","#ff6b6b"),("White","#ffffff")):
-            a=QAction(name,self.btn_ref_color);a.triggered.connect(lambda chk=False,v=hexv:self._set_note_ref_color(v));rm.addAction(a)
-        self.btn_ref_color.setMenu(rm)
+        self.font_up=QToolButton(bar);self.font_up.setObjectName("FmtFontStep");self.font_up.setCursor(Qt.CursorShape.PointingHandCursor);self.font_up.setToolTip("Increase Font Size")
+        self.font_down=QToolButton(bar);self.font_down.setObjectName("FmtFontStep");self.font_down.setCursor(Qt.CursorShape.PointingHandCursor);self.font_down.setToolTip("Decrease Font Size")
+        for b,fn,txt in ((self.font_up,"text size bigger.png","+"),(self.font_down,"text size smaller.png","-")):
+            p=_abs("..","Assets",fn)
+            if os.path.isfile(p):b.setIcon(QIcon(p));b.setIconSize(QSize(22,22));b.setText("")
+            else:b.setText(txt)
+            b.setFixedSize(42,42)
+        self.btn_color=QToolButton(bar);self.btn_color.setObjectName("FmtColor");self.btn_color.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_color.setToolTip("Text Color")
+        ci=_abs("..","Assets","Color.png")
+        if os.path.isfile(ci):self.btn_color.setIcon(QIcon(ci));self.btn_color.setIconSize(QSize(18,18));self.btn_color.setText("")
+        else:self.btn_color.setText("Color")
+        self.btn_highlight=QToolButton(bar);self.btn_highlight.setObjectName("FmtHighlight");self.btn_highlight.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_highlight.setToolTip("Highlight")
+        hi=_abs("..","Assets","Marker.png")
+        if os.path.isfile(hi):self.btn_highlight.setIcon(QIcon(hi));self.btn_highlight.setIconSize(QSize(18,18));self.btn_highlight.setText("")
+        else:self.btn_highlight.setText("Highlight")
+        self.color_line=QFrame(self.btn_color);self.color_line.setObjectName("FmtColorLine");self.color_line.setFixedHeight(3);self.color_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,True)
+        self.highlight_line=QFrame(self.btn_highlight);self.highlight_line.setObjectName("FmtHighlightLine");self.highlight_line.setFixedHeight(3);self.highlight_line.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents,True)
         self.align_left=QToolButton(bar);self.align_left.setObjectName("FmtAlignLeft");self.align_left.setCursor(Qt.CursorShape.PointingHandCursor)
         self.align_center=QToolButton(bar);self.align_center.setObjectName("FmtAlignCenter");self.align_center.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.align_right=QToolButton(bar);self.align_right.setObjectName("FmtAlignRight");self.align_right.setCursor(Qt.CursorShape.PointingHandCursor)
         il=_abs("..","Assets","left-align.png")
         if os.path.isfile(il):self.align_left.setIcon(QIcon(il));self.align_left.setIconSize(QSize(16,16))
         else:self.align_left.setText("Left")
         ic=_abs("..","Assets","center.png")
         if os.path.isfile(ic):self.align_center.setIcon(QIcon(ic));self.align_center.setIconSize(QSize(16,16))
         else:self.align_center.setText("Center")
+        ir=_abs("..","Assets","right-align.png")
+        if os.path.isfile(ir):self.align_right.setIcon(QIcon(ir));self.align_right.setIconSize(QSize(16,16))
+        else:self.align_right.setText("Right")
         self.btn_img=QToolButton(bar);self.btn_img.setObjectName("FmtImage");self.btn_img.setCursor(Qt.CursorShape.PointingHandCursor);self.btn_img.setText("Image")
         ii=_abs("..","Assets","image_icon.png")
         if os.path.isfile(ii):self.btn_img.setIcon(QIcon(ii));self.btn_img.setIconSize(QSize(22,22));self.btn_img.setText("");self.btn_img.setToolTip("Image");self.btn_img.setFixedSize(42,42)
@@ -2533,19 +2755,24 @@ class Widget(QWidget):
         self.b_i.clicked.connect(self._fmt_italic)
         self.b_u.clicked.connect(self._fmt_underline)
         self.font_size.currentTextChanged.connect(self._set_font_size)
+        self.font_up.clicked.connect(lambda:self._step_font_size(1))
+        self.font_down.clicked.connect(lambda:self._step_font_size(-1))
+        self.btn_color.clicked.connect(self._pick_text_color)
+        self.btn_highlight.clicked.connect(self._pick_highlight_color)
         self.align_left.clicked.connect(self._align_left)
         self.align_center.clicked.connect(self._align_center)
+        self.align_right.clicked.connect(self._align_right)
         self.btn_img.clicked.connect(self._insert_image)
         self.lst.clicked.connect(self._fmt_list)
         self.tbl.clicked.connect(self._fmt_table)
-        self.font_size.setFixedHeight(38);self.font_size.setMinimumWidth(72);self.font_size.setMaximumWidth(72)
-        self.btn_color.setFixedHeight(38)
-        self.btn_ref_color.setFixedHeight(38)
+        self.font_size.setFixedHeight(42);self.font_size.setMinimumWidth(72);self.font_size.setMaximumWidth(72)
+        self.btn_color.setFixedSize(42,42);self.btn_highlight.setFixedSize(42,42)
         bh.addWidget(self.b_b,0);bh.addWidget(self.b_i,0);bh.addWidget(self.b_u,0)
         bh.addSpacing(10)
-        bh.addWidget(self.font_size,0);bh.addWidget(self.btn_color,0);bh.addWidget(self.btn_ref_color,0)
+        bh.addWidget(self.font_size,0)
+        bh.addWidget(self.font_up,0);bh.addWidget(self.font_down,0);bh.addWidget(self.btn_color,0);bh.addWidget(self.btn_highlight,0)
         bh.addSpacing(10)
-        bh.addWidget(self.align_left,0);bh.addWidget(self.align_center,0)
+        bh.addWidget(self.align_left,0);bh.addWidget(self.align_center,0);bh.addWidget(self.align_right,0)
         bh.addSpacing(10)
         bh.addWidget(self.btn_img,0);bh.addWidget(self.lst,0);bh.addWidget(self.tbl,0)
         bh.addStretch(1)
@@ -2583,14 +2810,16 @@ class Widget(QWidget):
         b.addStretch(1);b.addWidget(self.cmd_ins,0);b.addWidget(self.cmd_can,0);b.addStretch(1)
         cb.addLayout(b)
         cb.addWidget(self.cmd_resize,0)
-        self.edit=NoteEdit(self._add_command,self._heading_enter,self._on_cmd_anchor,self._is_cmd_table,self._on_note_ref,self._on_note_ref,self._edit_note_link_dialog,self.tab_create);self.edit.setPlaceholderText("Write your notes here...")
+        self.edit=NoteEdit(self._add_command,self._heading_enter,self._on_cmd_anchor,self._is_cmd_table,self._on_note_ref,self._on_note_ref,self._edit_note_link_dialog,self._open_cmd_picker,self._add_note_link,self._add_line,self.tab_create);self.edit.setPlaceholderText("Write your notes here...")
         self.cmd_preview_scroll=QScrollArea(self.tab_create);self.cmd_preview_scroll.setObjectName("CmdPreviewScroll");self.cmd_preview_scroll.setWidgetResizable(True);self.cmd_preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff);self.cmd_preview_scroll.setMaximumHeight(230);self.cmd_preview_scroll.setVisible(False)
         self.cmd_preview_wrap=QFrame(self.cmd_preview_scroll);self.cmd_preview_wrap.setObjectName("CmdPreviewWrap")
         self.cmd_preview_layout=QVBoxLayout(self.cmd_preview_wrap);self.cmd_preview_layout.setContentsMargins(0,0,0,0);self.cmd_preview_layout.setSpacing(8)
         self.cmd_preview_scroll.setWidget(self.cmd_preview_wrap)
         self._note_ref_color=_note_ref_color()
-        self._update_color_button(None)
-        self._update_ref_color_button(self._note_ref_color)
+        self._current_text_color=_note_text_color()
+        self._current_highlight_color=_note_highlight_color()
+        self._update_color_button(self._current_text_color)
+        self._update_highlight_button(self._current_highlight_color)
         v.addLayout(top)
         v.addWidget(bar,0)
         v.addWidget(self.cmd_box,0)
@@ -2674,6 +2903,24 @@ class Widget(QWidget):
         right=QFrame(split);right.setObjectName("NoteNavDisplayFrame")
         rv=QVBoxLayout(right);rv.setContentsMargins(12,12,12,12);rv.setSpacing(8)
         self.nav_title=QLabel("Select a note",right);self.nav_title.setObjectName("NoteNavTitle")
+        self.nav_header=QFrame(right);self.nav_header.setObjectName("NoteNavHeader")
+        nh=QHBoxLayout(self.nav_header);nh.setContentsMargins(0,0,0,0);nh.setSpacing(8)
+        self.nav_find_btn=QToolButton(self.nav_header);self.nav_find_btn.setObjectName("MiniQuickBtn");self.nav_find_btn.setCursor(Qt.CursorShape.PointingHandCursor);self.nav_find_btn.setToolTip("Search Note")
+        sp=_abs("..","Assets","Search_white.png")
+        if os.path.isfile(sp):self.nav_find_btn.setIcon(QIcon(sp));self.nav_find_btn.setIconSize(QSize(16,16));self.nav_find_btn.setText("")
+        else:self.nav_find_btn.setText("Find")
+        nh.addWidget(self.nav_title,1);nh.addWidget(self.nav_find_btn,0)
+        self.nav_search_bar=QFrame(self.nav_header);self.nav_search_bar.setObjectName("MiniQuickSearch");self.nav_search_bar.setVisible(False)
+        ns=QHBoxLayout(self.nav_search_bar);ns.setContentsMargins(0,0,0,0);ns.setSpacing(6)
+        self.nav_note_search=QLineEdit(self.nav_search_bar);self.nav_note_search.setObjectName("MiniSearchInput");self.nav_note_search.setPlaceholderText("Find...")
+        self.nav_prev=self._small_nav_tool(self.nav_search_bar,"Up Arrow.png","^","Previous")
+        self.nav_next=self._small_nav_tool(self.nav_search_bar,"Down Arrow.png","v","Next")
+        self.nav_count=QLabel("",self.nav_search_bar);self.nav_count.setObjectName("MiniQuickCount")
+        self.nav_close=self._small_nav_tool(self.nav_search_bar,"","X","Close Search")
+        ns.addWidget(self.nav_note_search,1);ns.addWidget(self.nav_prev,0);ns.addWidget(self.nav_next,0);ns.addWidget(self.nav_count,0);ns.addWidget(self.nav_close,0)
+        nh.addWidget(self.nav_search_bar,1)
+        self.nav_linked_from=QFrame(right);self.nav_linked_from.setObjectName("NoteLinkedFrom");self.nav_linked_from.setVisible(False)
+        self.nav_linked_row=QHBoxLayout(self.nav_linked_from);self.nav_linked_row.setContentsMargins(0,0,0,0);self.nav_linked_row.setSpacing(6)
         self.nav_view=QTextBrowser(right);self.nav_view.setObjectName("NoteNavDisplay")
         self.nav_view.setReadOnly(True)
         self.nav_view.setOpenExternalLinks(False)
@@ -2687,7 +2934,8 @@ class Widget(QWidget):
         self.nav_cmd_wrap=QFrame(self.nav_cmd_scroll);self.nav_cmd_wrap.setObjectName("CmdPreviewWrap")
         self.nav_cmd_layout=QVBoxLayout(self.nav_cmd_wrap);self.nav_cmd_layout.setContentsMargins(0,0,0,0);self.nav_cmd_layout.setSpacing(8)
         self.nav_cmd_scroll.setWidget(self.nav_cmd_wrap)
-        rv.addWidget(self.nav_title,0)
+        rv.addWidget(self.nav_header,0)
+        rv.addWidget(self.nav_linked_from,0)
         rv.addWidget(self.nav_view,1)
         rv.addWidget(self.nav_cmd_scroll,0)
         split.addWidget(left);split.addWidget(right)
@@ -2696,6 +2944,20 @@ class Widget(QWidget):
         except Exception:pass
         self._nav_buttons=[]
         self._nav_selected=None
+        self.nav_find_btn.clicked.connect(self._show_nav_search)
+        self.nav_note_search.textChanged.connect(self._nav_search_changed)
+        self.nav_prev.clicked.connect(lambda:self._move_nav_match(-1))
+        self.nav_next.clicked.connect(lambda:self._move_nav_match(1))
+        self.nav_close.clicked.connect(self._close_nav_search)
+        QShortcut(QKeySequence("Ctrl+F"),self,activated=self._show_nav_search)
+        QShortcut(QKeySequence("Esc"),self,activated=self._close_nav_search)
+        self._nav_search_go_timer=QTimer(self);self._nav_search_go_timer.setSingleShot(True);self._nav_search_go_timer.setInterval(1000);self._nav_search_go_timer.timeout.connect(lambda:self._highlight_nav_search(True))
+    def _small_nav_tool(self,parent,icon,text,tip):
+        b=QToolButton(parent);b.setObjectName("MiniQuickBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setToolTip(tip);b.setFixedSize(32,28)
+        p=_abs("..","Assets",icon) if icon else ""
+        if p and os.path.isfile(p):b.setIcon(QIcon(p));b.setIconSize(QSize(16,16));b.setText("")
+        else:b.setText(text)
+        return b
     def _nav_elide_text(self,text,width,font):
         try:
             fm=QFontMetrics(font)
@@ -3314,6 +3576,8 @@ class Widget(QWidget):
             self.nav_list_layout.addWidget(lbl,0)
             self.nav_list_layout.addStretch(1)
             self.nav_title.setText("Select a note")
+            self.nav_linked_from.setVisible(False)
+            self._nav_current_note=None
             self.nav_view.clear()
             return
         for grp in group_names:
@@ -3359,7 +3623,9 @@ class Widget(QWidget):
         grp=_norm(n.get("group_name",""))
         if grp:self._set_nav_group_collapsed(grp,False)
         self._nav_selected=nm
+        self._nav_current_note=n
         self.nav_title.setText(f"{_group_label(grp)} | {nm}" if nm else "Note")
+        self._render_linked_from(n)
         try:self._touch_recent(n,refresh_list=False)
         except Exception:pass
         try:
@@ -3375,9 +3641,108 @@ class Widget(QWidget):
             self._refresh_cmd_image_resources(self.nav_view)
             self._nav_cmd_cards=content_cmds or db_cmds
             self._render_nav_cmd_cards()
+            if self.nav_search_bar.isVisible():self._highlight_nav_search(True)
         except Exception:
             try:self.nav_view.setPlainText(_strip_html(n.get("content","") or ""))
             except Exception:pass
+    def _linked_from_notes(self,target):
+        if not isinstance(target,dict):return []
+        try:self._notes_cache=_load_notes(self._dbp)
+        except Exception:self._notes_cache=[]
+        tid=target.get("id",None);tn=_norm(target.get("note_name",""))
+        out=[];seen=set()
+        for n in self._notes_cache:
+            try:
+                if tid is not None and int(n.get("id"))==int(tid):continue
+            except Exception:
+                pass
+            if tn and _kci(n.get("note_name",""))==_kci(tn):continue
+            content=n.get("content","") or ""
+            matched=False
+            for m in re.finditer(re.escape(_NOTE_LINK_ANCHOR)+r"([A-Za-z0-9_-]+)",content):
+                data=_decode_note_link_data(m.group(1))
+                did=_note_refs.note_ref_id(data);dn=_note_refs.note_ref_name(data)
+                try:
+                    if tid is not None and did is not None and int(did)==int(tid):matched=True
+                except Exception:
+                    pass
+                if not matched and tn and dn and _kci(dn)==_kci(tn):matched=True
+                if matched:break
+            if matched:
+                key=_note_refs.note_ref_key(self._row_note_ref(n))
+                if key and key not in seen:seen.add(key);out.append(n)
+        return out
+    def _render_linked_from(self,n):
+        try:self._clear_layout(self.nav_linked_row)
+        except Exception:pass
+        rows=self._linked_from_notes(n)
+        if not rows:
+            self.nav_linked_from.setVisible(False)
+            return
+        lbl=QLabel("Linked from:",self.nav_linked_from);lbl.setObjectName("NotesTotal")
+        self.nav_linked_row.addWidget(lbl,0)
+        for row in rows[:8]:
+            name=_norm(row.get("note_name","")) or "Note"
+            b=QToolButton(self.nav_linked_from);b.setObjectName("NoteNavChildBtn");b.setCursor(Qt.CursorShape.PointingHandCursor);b.setText(name);b.setToolTip((_group_label(row.get("group_name",""))+" | "+name).strip())
+            b.clicked.connect(lambda checked=False,r=row:self.open_note_ref(note_id=r.get("id"),note_name=r.get("note_name","")))
+            self.nav_linked_row.addWidget(b,0)
+        if len(rows)>8:
+            more=QLabel(f"+{len(rows)-8}",self.nav_linked_from);more.setObjectName("NotesTotal");self.nav_linked_row.addWidget(more,0)
+        self.nav_linked_row.addStretch(1)
+        self.nav_linked_from.setVisible(True)
+    def _show_nav_search(self):
+        if not getattr(self,"_nav_current_note",None):return
+        self.nav_search_bar.setVisible(True);self.nav_note_search.setFocus();self.nav_note_search.selectAll();self._highlight_nav_search(True)
+    def _close_nav_search(self):
+        if not hasattr(self,"nav_search_bar") or not self.nav_search_bar.isVisible():return
+        try:self._nav_search_go_timer.stop()
+        except Exception:pass
+        self.nav_search_bar.setVisible(False);self.nav_note_search.clear();self._clear_nav_highlight();self.nav_view.setFocus()
+    def _nav_search_changed(self,text):
+        if not _norm(text):
+            try:self._nav_search_go_timer.stop()
+            except Exception:pass
+            self._clear_nav_highlight()
+            return
+        self._highlight_nav_search()
+        try:self._nav_search_go_timer.start()
+        except Exception:pass
+    def _clear_nav_highlight(self):
+        self._nav_matches=[];self._nav_match_index=-1
+        try:self.nav_view.setExtraSelections([])
+        except Exception:pass
+        try:self.nav_count.setText("")
+        except Exception:pass
+    def _highlight_nav_search(self,go_first=False):
+        q=self.nav_note_search.text()
+        if not q:self._clear_nav_highlight();return
+        doc_text=self.nav_view.toPlainText();low=doc_text.lower();needle=q.lower();start=0;matches=[]
+        while needle:
+            i=low.find(needle,start)
+            if i<0:break
+            matches.append((i,i+len(q)));start=i+max(1,len(q))
+        sels=[];fmt=QTextCharFormat();fmt.setBackground(QColor("#ffe86a"));fmt.setForeground(QColor("#000000"));doc=self.nav_view.document()
+        for s,e in matches:
+            cur=QTextCursor(doc);cur.setPosition(s);cur.setPosition(e,QTextCursor.MoveMode.KeepAnchor)
+            sel=QTextEdit.ExtraSelection();sel.cursor=cur;sel.format=fmt;sels.append(sel)
+        self._nav_matches=matches
+        if matches and (self._nav_match_index<0 or self._nav_match_index>=len(matches)):self._nav_match_index=0
+        if not matches:self._nav_match_index=-1
+        self.nav_view.setExtraSelections(sels);self._update_nav_search_count()
+        if go_first and matches:
+            self._nav_match_index=0
+            self._go_nav_match()
+    def _update_nav_search_count(self):
+        self.nav_count.setText(f"{self._nav_match_index+1}/{len(self._nav_matches)}" if self._nav_matches else "0/0")
+    def _move_nav_match(self,delta):
+        if not self._nav_matches:self._highlight_nav_search()
+        if not self._nav_matches:return
+        self._nav_match_index=(self._nav_match_index+delta)%len(self._nav_matches)
+        self._go_nav_match()
+    def _go_nav_match(self):
+        if not self._nav_matches or self._nav_match_index<0:return
+        s,e=self._nav_matches[self._nav_match_index]
+        cur=QTextCursor(self.nav_view.document());cur.setPosition(s);cur.setPosition(e,QTextCursor.MoveMode.KeepAnchor);self.nav_view.setTextCursor(cur);self.nav_view.ensureCursorVisible();self._update_nav_search_count()
     def _nav_show_menu(self,btn,pos,n=None,group_name=""):
         note=n if isinstance(n,dict) else None
         grp=_norm(group_name if _norm(group_name) else ((note or {}).get("group_name","") if note else ""))
@@ -3497,6 +3862,7 @@ class Widget(QWidget):
         if btn==save:return bool(self._save_note(False))
         if btn==discard:
             self._new_note()
+            self._clear_draft_recovery()
             return True
         return False
     def _on_tab(self,i):
@@ -3518,9 +3884,58 @@ class Widget(QWidget):
             return _sig(n,h+"\n"+cmds,g)
         except Exception:
             return _sig(name or "",htmls or "",group_name or "")
+    def _schedule_draft_save(self):
+        if getattr(self,"_loading_draft",False):return
+        dlg=getattr(self,"_create_dialog",None)
+        if dlg and dlg.isVisible() and hasattr(self,"_draft_timer"):self._draft_timer.start()
+    def _draft_payload(self):
+        return {"note_id":self._note_id,"orig_name":self._orig_name or "","name":_norm(self.in_name.text()),"group":_norm(self.in_group.text()),"html":self.edit.toHtml(),"text":self.edit.toPlainText(),"cmd_cards":[self._normalize_cmd_card(x) for x in (self._cmd_cards or [])],"saved_at":datetime.now(timezone.utc).isoformat()}
+    def _save_draft_recovery(self):
+        if not self._needs_save_prompt():return
+        try:_write_json(_draft_recovery_path(),self._draft_payload())
+        except Exception as e:_log("[!]",f"Draft recovery save failed ({e})")
+    def _clear_draft_recovery(self):
+        try:
+            p=_draft_recovery_path()
+            if os.path.isfile(p):os.remove(p)
+        except Exception:pass
+    def _load_draft_recovery_payload(self):
+        d=_read_json(_draft_recovery_path())
+        return d if isinstance(d,dict) and (_norm(d.get("name","")) or _norm(d.get("text","")) or _norm(d.get("html","")) or d.get("cmd_cards")) else None
+    def _apply_draft_recovery(self,d):
+        if not isinstance(d,dict):return False
+        self._loading_draft=True
+        try:
+            self._new_note()
+            self._note_id=d.get("note_id",None)
+            self._orig_name=_norm(d.get("orig_name","")) or None
+            self.in_name.setText(_norm(d.get("name","")))
+            self.in_group.setText(_norm(d.get("group","")))
+            htmls=d.get("html","") or ""
+            if htmls:self.edit.setHtml(htmls)
+            else:self.edit.setPlainText(d.get("text","") or "")
+            cards=d.get("cmd_cards",[])
+            self._cmd_cards=[self._normalize_cmd_card(x) for x in cards if isinstance(x,dict)]
+            self._render_editor_cmd_cards()
+            self._last_sig=None;self._dirty=True
+            self._open_create_dialog(False)
+            return True
+        finally:
+            self._loading_draft=False
+    def _maybe_offer_draft_recovery(self):
+        if self._draft_recovery_checked:return
+        self._draft_recovery_checked=True
+        d=self._load_draft_recovery_payload()
+        if not d:return
+        w=self.window() if self.window() else self
+        res=QMessageBox.question(w,"Recover Draft","Recover unsaved changes?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
+        if res==QMessageBox.StandardButton.Yes:
+            if self._apply_draft_recovery(d):return
+        self._clear_draft_recovery()
     def _mark_dirty(self,*a):
         self._dirty=True
         self._schedule_placeholder_scan()
+        self._schedule_draft_save()
         try:self._render_editor_cmd_cards()
         except Exception:pass
     def _needs_save_prompt(self):
@@ -3550,6 +3965,7 @@ class Widget(QWidget):
         if res==QMessageBox.StandardButton.Yes:
             return bool(self._save_note(False))
         if res==QMessageBox.StandardButton.No:
+            self._clear_draft_recovery()
             return True
         return False
     def _schedule_placeholder_scan(self):
@@ -3579,8 +3995,8 @@ class Widget(QWidget):
         text=self.edit.toPlainText() if hasattr(self,"edit") else ""
         unknown=[];invalid=[]
         seen=set()
-        for m in re.finditer(r"\{([^{}\r\n]+)\}",text or ""):
-            raw=_norm(m.group(1))
+        for _,_,raw in _iter_brace_keys(text or ""):
+            raw=_norm(raw)
             if not raw:continue
             lk=_kci(raw)
             if lk in seen:continue
@@ -3660,11 +4076,11 @@ class Widget(QWidget):
             self._set_format_controls(fmt.fontWeight()>=700,fmt.fontItalic(),fmt.fontUnderline(),size,self._fmt_foreground_hex(fmt))
         except Exception:pass
     def _fmt_bold(self):
-        fmt=QTextCharFormat();fmt.setFontWeight(900 if self.b_b.isChecked() else 400);self._merge_charfmt(fmt);self._dirty=True
+        fmt=QTextCharFormat();fmt.setFontWeight(900 if self.b_b.isChecked() else 400);self._merge_charfmt(fmt);self._dirty=True;self._schedule_draft_save()
     def _fmt_italic(self):
-        fmt=QTextCharFormat();fmt.setFontItalic(bool(self.b_i.isChecked()));self._merge_charfmt(fmt);self._dirty=True
+        fmt=QTextCharFormat();fmt.setFontItalic(bool(self.b_i.isChecked()));self._merge_charfmt(fmt);self._dirty=True;self._schedule_draft_save()
     def _fmt_underline(self):
-        fmt=QTextCharFormat();fmt.setFontUnderline(bool(self.b_u.isChecked()));self._merge_charfmt(fmt);self._dirty=True
+        fmt=QTextCharFormat();fmt.setFontUnderline(bool(self.b_u.isChecked()));self._merge_charfmt(fmt);self._dirty=True;self._schedule_draft_save()
     def _set_font_size(self,t):
         try:size=float(t)
         except:return
@@ -3674,32 +4090,33 @@ class Widget(QWidget):
         c.mergeCharFormat(fmt);self.edit.mergeCurrentCharFormat(fmt)
         self._current_font_size=size
         self._dirty=True
+        self._schedule_draft_save()
+    def _step_font_size(self,delta):
+        try:cur=float(self.font_size.currentText() or self._current_font_size or _DEFAULT_FONT_SIZE)
+        except Exception:cur=float(_DEFAULT_FONT_SIZE)
+        size=max(1,min(200,int(round(cur))+int(delta)))
+        self.font_size.setCurrentText(str(size))
+        self._set_font_size(str(size))
     def _update_color_button(self,hexv):
-        self._current_text_color=hexv
-        if not hexv:
-            self.btn_color.setText("Color")
-            self.btn_color.setStyleSheet("QToolButton#FmtColor{background:#59152a46;color:#ffffff;border:1px solid #667fbfff;border-radius:14px;padding:0 12px;min-height:38px;max-height:38px;}")
-            return
-        h=hexv.lstrip("#")
+        color=_norm_hex_color(hexv) or _note_text_color() or "#ffffff"
+        self._current_text_color=color
         try:
-            r=int(h[0:2],16);g=int(h[2:4],16);b=int(h[4:6],16)
-        except:
-            r=g=b=255
-        lum=(0.299*r+0.587*g+0.114*b)/255.0
-        fg="#000000" if lum>0.6 else "#ffffff"
-        self.btn_color.setText("Color")
-        self.btn_color.setStyleSheet(f"QToolButton#FmtColor{{background:{hexv};color:{fg};border:1px solid #667fbfff;border-radius:14px;padding:0 12px;min-height:38px;max-height:38px;}}")
-    def _update_ref_color_button(self,hexv):
-        color=_norm_hex_color(hexv) or _NOTE_REF_COLOR_DEFAULT
-        h=color.lstrip("#")
-        if len(h)!=6:
-            self.btn_ref_color.setText("Ref Color")
-            self.btn_ref_color.setStyleSheet("QToolButton#FmtRefColor{background:#59152a46;color:#ffffff;border:1px solid #667fbfff;border-radius:14px;padding:0 12px;min-height:38px;max-height:38px;}")
-            return
-        r=int(h[0:2],16);g=int(h[2:4],16);b=int(h[4:6],16)
-        fg="#000000" if (r*0.299+g*0.587+b*0.114)>140 else "#ffffff"
-        self.btn_ref_color.setText("Ref Color")
-        self.btn_ref_color.setStyleSheet(f"QToolButton#FmtRefColor{{background:{color};color:{fg};border:1px solid #667fbfff;border-radius:14px;padding:0 12px;min-height:38px;max-height:38px;}}")
+            self.color_line.setGeometry(8,34,26,3);self.color_line.setStyleSheet(f"QFrame#FmtColorLine{{background:{color};border:0;border-radius:2px;}}");self.color_line.raise_()
+        except Exception:pass
+    def _update_highlight_button(self,hexv):
+        color=_norm_hex_color(hexv) or _note_highlight_color()
+        self._current_highlight_color=color
+        try:
+            self.highlight_line.setGeometry(8,34,26,3);self.highlight_line.setStyleSheet(f"QFrame#FmtHighlightLine{{background:{color};border:0;border-radius:2px;}}");self.highlight_line.raise_()
+        except Exception:pass
+    def _pick_text_color(self):
+        dlg=_ColorPickerDlg(self,"Text Color",self._current_text_color or _note_text_color())
+        if dlg.exec()!=QDialog.DialogCode.Accepted:return
+        self._set_text_color(dlg.color())
+    def _pick_highlight_color(self):
+        dlg=_ColorPickerDlg(self,"Highlight",self._current_highlight_color or _note_highlight_color())
+        if dlg.exec()!=QDialog.DialogCode.Accepted:return
+        self._set_highlight_color(dlg.color())
     def _set_note_ref_color(self,hexv):
         color=_norm_hex_color(hexv)
         _set_note_ref_color_setting(color)
@@ -3707,13 +4124,21 @@ class Widget(QWidget):
         self._note_ref_color=use
         try:self._placeholder_highlighter.set_note_ref_color(use)
         except Exception:pass
-        self._update_ref_color_button(use)
     def _set_text_color(self,hexv):
+        hexv=_norm_hex_color(hexv) or _note_text_color()
         fmt=QTextCharFormat()
-        if hexv:fmt.setForeground(QColor(hexv))
-        else:fmt.clearForeground()
+        fmt.setForeground(QColor(hexv))
         self._merge_charfmt(fmt);self._dirty=True
+        _set_note_text_color_setting(hexv)
         self._update_color_button(hexv)
+        self._schedule_draft_save()
+    def _set_highlight_color(self,hexv):
+        hexv=_norm_hex_color(hexv) or _note_highlight_color()
+        fmt=QTextCharFormat();fmt.setBackground(QColor(hexv))
+        self._merge_charfmt(fmt);self._dirty=True
+        _set_note_highlight_color_setting(hexv)
+        self._update_highlight_button(hexv)
+        self._schedule_draft_save()
     def _align_table(self,align):
         try:
             cur=self.edit.textCursor()
@@ -3740,12 +4165,21 @@ class Widget(QWidget):
         if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
         fmt=QTextBlockFormat();fmt.setAlignment(Qt.AlignmentFlag.AlignLeft)
         c.mergeBlockFormat(fmt);self.edit.setTextCursor(c);self._dirty=True
+        self._schedule_draft_save()
     def _align_center(self):
         if self._align_table(Qt.AlignmentFlag.AlignHCenter):return
         c=self._cursor()
         if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
         fmt=QTextBlockFormat();fmt.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         c.mergeBlockFormat(fmt);self.edit.setTextCursor(c);self._dirty=True
+        self._schedule_draft_save()
+    def _align_right(self):
+        if self._align_table(Qt.AlignmentFlag.AlignRight):return
+        c=self._cursor()
+        if not c.hasSelection():c.select(QTextCursor.SelectionType.BlockUnderCursor)
+        fmt=QTextBlockFormat();fmt.setAlignment(Qt.AlignmentFlag.AlignRight)
+        c.mergeBlockFormat(fmt);self.edit.setTextCursor(c);self._dirty=True
+        self._schedule_draft_save()
     def _insert_image(self):
         p,_=QFileDialog.getOpenFileName(self,"Insert Image",_abs(".."),"Images (*.png *.jpg *.jpeg *.bmp *.gif *.webp);;All Files (*)")
         if not p:return
@@ -4186,6 +4620,16 @@ class Widget(QWidget):
             for c in range(table.columns()):
                 cell=table.cellAt(r,c)
                 cf=cell.format();cf.clearBackground();cell.setFormat(cf)
+    def _add_line(self):
+        cur=self.edit.textCursor()
+        try:
+            tb=cur.currentTable()
+            if tb and self._is_cmd_table(tb):
+                cur=QTextCursor(self.edit.document());cur.setPosition(tb.lastCursorPosition().position()+1)
+        except Exception:
+            pass
+        cur.insertHtml("<hr>")
+        self.edit.setTextCursor(cur);self._dirty=True;self._schedule_draft_save()
     def _style_cmd_tables_in_doc(self,doc):
         count=0
         for tb in self._iter_doc_tables(doc):
@@ -4501,6 +4945,7 @@ class Widget(QWidget):
         data=self._cmd_data(title,cat,sub,desc,tags,cmd)
         self._add_cmd_card(data)
         self._dirty=True
+        self._schedule_draft_save()
         try:self.edit.setFocus()
         except:pass
     def _note_link_notes(self):
@@ -4517,6 +4962,7 @@ class Widget(QWidget):
         if not isinstance(vals,dict):return
         note={"note_id":vals.get("note_id"),"note_name":vals.get("note_name",vals.get("note",""))};title=vals.get("title","")
         if self.edit.insert_note_link(note,title,cursor=cur):
+            self._dirty=True;self._schedule_draft_save()
             try:self.edit.setFocus()
             except Exception:pass
     def _edit_note_link_dialog(self,data):
@@ -4576,6 +5022,7 @@ class Widget(QWidget):
         else:
             self._add_cmd_card(data)
         self._dirty=True
+        self._schedule_draft_save()
         self._render_editor_cmd_cards()
         if hasattr(self,"cmd_box"):self.cmd_box.setVisible(False)
         try:self.edit.setFocus()
@@ -4588,6 +5035,7 @@ class Widget(QWidget):
         if not name and not body and not self._dirty:self._new_note();return
         if QMessageBox.question(w,"New Note","Start a new note? Unsaved changes will be lost.",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)!=QMessageBox.StandardButton.Yes:return
         self._new_note()
+        self._clear_draft_recovery()
         _log("[*]","New note started")
     def _load_into_editor(self,n):
         self._cmd_box_hide()
@@ -4850,6 +5298,8 @@ class Widget(QWidget):
                 except Exception:pass
                 try:self._render_group_manager(force=True)
                 except Exception:pass
+                try:self.note_saved.emit()
+                except Exception:pass
                 _log("[+]",f"Moved note to Recycle Bin: {name}")
             else:QMessageBox.critical(w,"Error","Failed to move note to Recycle Bin.")
     def _edit_list_note(self,n):
@@ -4901,6 +5351,7 @@ class Widget(QWidget):
                 try:self._clear_heading_format()
                 except Exception:pass
                 self._toast_show("Already saved",1500)
+                self._clear_draft_recovery()
                 if reset_after:QTimer.singleShot(0,self._close_create_dialog_after_save)
                 _log("[*]",f"Save skipped (already saved): {name}")
                 return True
@@ -4952,6 +5403,7 @@ class Widget(QWidget):
             try:self._render_group_manager(force=True)
             except Exception:pass
             self._toast_show(f"Saved ({ncmd})",2000)
+            self._clear_draft_recovery()
             if reset_after:QTimer.singleShot(0,self._close_create_dialog_after_save)
             _log("[+]",f"Saved note: {name} cmds={ncmd}")
             return True

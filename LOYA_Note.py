@@ -439,6 +439,13 @@ class MainWindow(QMainWindow):
                 if callable(hook):hook()
             except Exception:
                 pass
+        if key=="searchcopy":
+            try:
+                s=getattr(self,"page_searchcopy",None)
+                if hasattr(s,"reload"):s.reload()
+                elif hasattr(s,"refresh"):s.refresh()
+            except Exception:
+                pass
         _apply_control_sizing(self)
         QTimer.singleShot(0,lambda:_apply_control_sizing(self))
         _log("[*]",f"Nav: {key}")

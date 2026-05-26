@@ -1,15 +1,11 @@
-# LOYA Note v5.0.0
+# LOYA Note v5.1.0
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/issues)
 
-<p align="center">
-  <img src="Assets/ScreenShot.png" alt="LOYA Note v5.0.0 Screenshot" width="900">
-</p>
-
-LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, and update recovery.
-Version 5 starts on Notes, uses the custom LOYA title bar, and keeps the removed LOYA Chat module out of the main and mini navigation.
+LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, update recovery, and optional local security.
+Version 5.1.0 focuses on the Notes workflow: richer Create Note formatting, modeless editing, better note search, linked-note backlinks, PDF export, themed HTML export, and more flexible `{Element}` detection.
 ## Requirements
 - Python `>=3.10`
 - Packages are installed automatically from [`Requirements.json`](Requirements.json)
@@ -29,10 +25,13 @@ The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment
 ## Main Areas
 ### Notes
 - Rich text notes with embedded command blocks
-- Command blocks support click-to-copy from the note viewer
+- Create Note supports text alignment, text color, highlight color, font-size controls, command picking, note linking, horizontal lines, `Ctrl+S`, and draft recovery
+- Command blocks support click-to-copy from the note viewer and themed HTML exports
 - Stable note opening through `note_id`
 - Optional note groups with a folded Navigate tree
 - Group Manager for rename, move, ungroup, and delete-empty-group actions
+- Selected-note search can open from the note header or `Ctrl+F` and supports match counts plus previous/next navigation
+- Linked notes show backlinks through `Linked from`
 ### Commands
 - Standalone commands and commands linked from notes
 - Right-click actions are focused on `Open Related Note` and `Copy Command`
@@ -43,8 +42,9 @@ The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment
 - Search, Favorites, and Sort By controls
 - Favorites can be sorted first, and commands can be copied quickly
 - Related-note opening is available when a command belongs to a note
+- Snippets refresh after note save/delete and when the Snippets tab is opened
 ### Targets
-- Reusable placeholders such as `{IP}` and `{URL}`
+- Reusable placeholders such as `{IP}`, `{IPv4/Subnet}`, `{User Name}`, and `{URL Path / Login}`
 - Target values are shared across Notes, Commands, Search, and Mini Window
 ### Mini Window
 - Small command, target, and Quick Space workspace
@@ -52,9 +52,17 @@ The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment
 - Quick Space supports autosave, manual save, and theme-matched controls
 ### Settings
 - Security, Backup, Import & Export, Tags, Update, and Recycle Bin pages
+### Security
+- Optional app lock on startup
+- Optional local database encryption at rest
+- PIN hashing uses PBKDF2 and encryption uses the installed cryptography package
+- Encryption state is checked during startup health checks
 ## Import & Export
 - Export All creates a full data `.zip`
 - Export supports Notes, Commands, Targets, and Target Values in the supported file formats
+- Notes can be exported as standalone HTML or PDF
+- All notes can be exported as one merged PDF with page breaks
+- HTML note export uses an embedded LOYA theme, preserves alignment, and renders command blocks with text `Copy` buttons
 - Import uses a preview flow before writing data
 - Template provides human templates
 - AI Prompt Template provides prompts that explain LOYA Note structures for AI-assisted conversion
@@ -113,7 +121,7 @@ Do not include local runtime or retired folders in the release asset:
 - Code snapshots: `Cores/Update/OldVersions/`
 ## Versioning
 - Visible app version, launcher version, updater version, and README version should stay aligned
-- This build is `5.0.0`
+- This build is `5.1.0`
 ## Links
 - Repository: https://github.com/emaldos/LOYA-Note
 - Issues: https://github.com/emaldos/LOYA-Note/issues

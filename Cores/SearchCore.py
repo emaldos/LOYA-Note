@@ -63,6 +63,21 @@ def _clean_cmd(s):
     raw=re.sub(r"\n\s+","\n",raw)
     raw=re.sub(r"\s+\n","\n",raw)
     return raw.strip()
+def _iter_placeholders(text):
+    t=str(text or "")
+    i=0;n=len(t)
+    while i<n:
+        if t[i]!="{":
+            i+=1;continue
+        start=i;j=i+1;bad=False
+        while j<n and t[j]!="}":
+            if t[j] in "{\r\n":bad=True
+            j+=1
+        if j>=n:break
+        if not bad:
+            raw=t[start+1:j].strip()
+            if raw:yield start,j+1,raw
+        i=j+1
 def _safe_mtime(p):
     try:return os.path.getmtime(p) if p and os.path.isfile(p) else None
     except:return None
@@ -294,17 +309,17 @@ class LiveTargetContext:
 class CommandReplacer:
     def __init__(self,ctx:LiveTargetContext):
         self.ctx=ctx
-        self._rx=re.compile(r"\{([^{}]+)\}")
     def apply(self,cmd):
         s=_norm(cmd)
         if not s:return ""
         mp=getattr(self.ctx,"map",{}) or {}
         if not mp:return s
-        def repl(m):
-            k=_l(m.group(1))
-            if k in mp:return mp[k]
-            return "{"+m.group(1)+"}"
-        try:return self._rx.sub(repl,s)
+        out=[];last=0
+        try:
+            for start,end,key in _iter_placeholders(s):
+                out.append(s[last:start]);out.append(mp.get(_l(key),"{"+key+"}"));last=end
+            out.append(s[last:])
+            return "".join(out)
         except:return s
 class Table_Style(QWidget):
     def __init__(self,on_copy,get_cmd,parent=None):
@@ -1357,7 +1372,7 @@ class SnippetPanelPreviewWidget(QWidget):
         self.lbl_meta.setText(f"{n.get('src','')} | {n.get('cat','')} / {n.get('sub','')} | copied {n.get('count',0)} times | note: {n.get('note','-') or '-'}")
         mode=self._current_mode();text=n.get("resolved" if mode=="resolved" else "cmd","");self.command.setPlainText(text)
         self.ph.addWidget(self._label("Placeholders","SnippetSection"),0)
-        keys=re.findall(r"\{([^{}]+)\}",n.get("cmd",""))
+        keys=[k for _,_,k in _iter_placeholders(n.get("cmd",""))]
         if not keys:self.ph.addWidget(self._label("No placeholders in this command.","SnippetMeta"),0)
         for k in keys:
             missing=k in (n.get("missing") or [])
@@ -1450,7 +1465,7 @@ class SimpleSnippetPreviewWidget(QWidget):
         v.addLayout(top,0);v.addWidget(meta,0);v.addWidget(cmd,0)
         if n.get("id") in self._expanded:
             detail=self._lbl(n.get("desc",""),"SimpleSnippetDetail")
-            ph=self._lbl("Placeholders: "+(", ".join(re.findall(r"\{([^{}]+)\}",n.get("cmd",""))) or "none"),"SimpleSnippetMeta")
+            ph=self._lbl("Placeholders: "+(", ".join([k for _,_,k in _iter_placeholders(n.get("cmd",""))]) or "none"),"SimpleSnippetMeta")
             act=QHBoxLayout();act.setSpacing(8)
             b1=self._btn("Copy");b2=self._btn("Copy Raw");b3=self._btn("Edit");b4=self._btn("Pin" if not n.get("pin") else "Unpin")
             b1.clicked.connect(lambda chk=False,x=n:self._copy(x,"resolved"));b2.clicked.connect(lambda chk=False,x=n:self._copy(x,"raw"));b3.clicked.connect(lambda chk=False,x=n:self._set_status(f"Edit preview: {x.get('title','')}"));b4.clicked.connect(lambda chk=False,x=n:self._pin(x))

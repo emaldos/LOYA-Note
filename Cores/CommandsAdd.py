@@ -55,8 +55,8 @@ def _clamp_u16(n):
     return n
 _SETTINGS_CACHE=None
 _SETTINGS_MTIME=None
-_KEY_RE_STRICT=re.compile(r"^[A-Za-z_][A-Za-z0-9_-]*$")
-_KEY_RE_EXT=re.compile(r"^[A-Za-z_][A-Za-z0-9_\-.:]*$")
+_KEY_RE_STRICT=re.compile(r"^[^{}\r\n]+$")
+_KEY_RE_EXT=re.compile(r"^[^{}\r\n]+$")
 def _settings_path():
     d=_abs("..","Data");os.makedirs(d,exist_ok=True)
     return os.path.join(d,"settings.json")
@@ -86,10 +86,24 @@ def _allow_dots_colons():
     t=s.get("targets",{}) if isinstance(s,dict) else {}
     return bool(t.get("allow_dots_colons",False))
 def _is_valid_key(k):
+    k=_norm_tag(k)
     if not k:return False
-    rx=_KEY_RE_EXT if _allow_dots_colons() else _KEY_RE_STRICT
-    if not rx.match(k):return False
-    return any(ch.isalpha() for ch in k)
+    return bool(_KEY_RE_EXT.fullmatch(k))
+def _iter_brace_keys(text):
+    t=html.unescape(str(text or ""))
+    i=0;n=len(t)
+    while i<n:
+        if t[i]!="{":
+            i+=1;continue
+        start=i;j=i+1;bad=False
+        while j<n and t[j]!="}":
+            if t[j] in "{\r\n":bad=True
+            j+=1
+        if j>=n:break
+        if not bad:
+            raw=_norm_tag(t[start+1:j])
+            if raw:yield raw
+        i=j+1
 def _load_target_priorities():
     p=_targets_values_path()
     exists=os.path.isfile(p)
@@ -178,8 +192,7 @@ def _extract_target_keys_from_db(dbp):
         for (text,) in cur.fetchall():
             if not text:continue
             raw=html.unescape(str(text))
-            for m in re.finditer(r"\{([^{}\r\n]+)\}",raw):
-                k=_norm_tag(m.group(1))
+            for k in _iter_brace_keys(raw):
                 if not k or not _is_valid_key(k):continue
                 lk=k.lower()
                 if lk in seen:continue
@@ -194,9 +207,8 @@ def _extract_target_keys_from_db(dbp):
 def _target_keys_from_text(text):
     keys=[]
     if not text:return keys
-    raw=html.unescape(str(text));seen=set()
-    for m in re.finditer(r"\{([^{}\r\n]+)\}",raw):
-        k=_norm_tag(m.group(1))
+    seen=set()
+    for k in _iter_brace_keys(text):
         if not k or not _is_valid_key(k):continue
         lk=k.lower()
         if lk in seen:continue
@@ -316,8 +328,9 @@ class _PlaceholderCompleter(QObject):
         if last_open<0:return None
         last_close=left.rfind("}")
         if last_close>last_open:return None
+        if "{" in (left[last_close+1:last_open] if last_close>=0 else left[:last_open]):return None
         prefix=left[last_open+1:]
-        if not re.match(r"^[A-Za-z0-9_.:-]*$",prefix):return None
+        if re.search(r"[{}\r\n]",prefix):return None
         return prefix,last_open+1
     def _show(self):
         ctx=self._brace_context()
@@ -409,8 +422,10 @@ class _CmdElementSuggest(QObject):
         left=text[:pos];last_open=left.rfind("{")
         if last_open<0:return None
         if left.rfind("}")>last_open:return None
+        last_close=left.rfind("}")
+        if "{" in (left[last_close+1:last_open] if last_close>=0 else left[:last_open]):return None
         prefix=left[last_open+1:]
-        if not re.match(r"^[A-Za-z0-9_.:-]*$",prefix):return None
+        if re.search(r"[{}\r\n]",prefix):return None
         return prefix,last_open+1,pos
     def _rows(self,prefix):
         try:return list(self._row_fn(prefix,3) or [])
