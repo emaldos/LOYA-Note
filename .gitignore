@@ -37,3 +37,18 @@ dist/
 Thumbs.db
 Desktop.ini
 .DS_Store
+# Personal / local-only files not part of the project
+Nmap Cheatsheet.md
+# macOS extended attributes
+*.AppleDouble
+*.LSOverride
+# Windows image file caches
+ehthumbs.db
+# Packaging artifacts
+*.egg-info/
+*.egg
+MANIFEST
+# Distribution / packaging
+.Python
+pip-log.txt
+pip-delete-this-directory.txt

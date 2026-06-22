@@ -1,21 +1,18 @@
-# LOYA Note v5.1.0
+# LOYA Note v5.1.1
 [![Python Version](https://img.shields.io/badge/python-3.10%2B-blue.svg)](https://python.org)
 [![License](https://img.shields.io/github/license/emaldos/LOYA-Note.svg)](LICENSE)
 [![GitHub Stars](https://img.shields.io/github/stars/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/stargazers)
 [![GitHub Issues](https://img.shields.io/github/issues/emaldos/LOYA-Note.svg)](https://github.com/emaldos/LOYA-Note/issues)
 
-<p align="center">
-  <img src="Assets/ScreenShot.png" alt="LOYA Note v5.0.0 Screenshot" width="900">
-</p>
-
 LOYA Note is a local desktop app for notes, reusable commands, target placeholders, snippets, backups, import/export, update recovery, and optional local security.
-Version 5.1.0 focuses on the Notes workflow: richer Create Note formatting, modeless editing, better note search, linked-note backlinks, PDF export, themed HTML export, and more flexible `{Element}` detection.
+Version 5.1.1 is a quality and compatibility release: sortable columns across all tables, Linux bug fixes (color picker positioning, save-without-name dialog, draft recovery Edit option), correct `{PLACEHOLDER}` detection that ignores shell `{}` and JSON braces, a fully themed update screen, and launcher improvements (log rotation, deps fingerprint cache, `--skip-update` flag, already-running detection, broken venv auto-cleanup with Linux install hint).
 ## Requirements
 - Python `>=3.10`
 - Packages are installed automatically from [`Requirements.json`](Requirements.json)
 - Runtime packages: PyQt6 and cryptography
 - Windows: Qt 6 requires Windows 10 version 1809 or later
 - Windows: Microsoft Visual C++ Redistributable x64 should be installed for PyQt6 runtime support
+- Linux: if venv creation fails, run `sudo apt install python3-venv python3-pip` (the launcher will print the exact package name)
 ## Quick Start
 Windows:
 ```powershell
@@ -26,10 +23,15 @@ Linux:
 python3 RunNote.py
 ```
 The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment, installs packages, validates the runtime, and starts the app.
+Use `--skip-update` to skip the pip/deps update step on slow or offline machines:
+```bash
+python3 RunNote.py --skip-update
+```
 ## Main Areas
 ### Notes
 - Rich text notes with embedded command blocks
 - Create Note supports text alignment, text color, highlight color, font-size controls, command picking, note linking, horizontal lines, `Ctrl+S`, and draft recovery
+- Draft recovery dialog now offers **Edit Draft** so a nameless draft can be completed before saving
 - Command blocks support click-to-copy from the note viewer and themed HTML exports
 - Stable note opening through `note_id`
 - Optional note groups with a folded Navigate tree
@@ -50,17 +52,21 @@ The launcher in [`RunNote.py`](RunNote.py) creates the local virtual environment
 ### Targets
 - Reusable placeholders such as `{IP}`, `{IPv4/Subnet}`, `{User Name}`, and `{URL Path / Login}`
 - Target values are shared across Notes, Commands, Search, and Mini Window
+- Commands containing shell `{}` (e.g. `find … -exec ls {} \;`) or JSON bodies (`{"key":"value"}`) are no longer incorrectly treated as placeholders — only `{IDENTIFIER}` patterns are substituted
 ### Mini Window
 - Small command, target, and Quick Space workspace
 - Commands use the same related-note picker and copy flow as the main app
 - Quick Space supports autosave, manual save, and theme-matched controls
 ### Settings
 - Security, Backup, Import & Export, Tags, Update, and Recycle Bin pages
+- Update screen (progress dialog, confirmation, and status boxes) now fully matches the app dark theme
 ### Security
 - Optional app lock on startup
 - Optional local database encryption at rest
 - PIN hashing uses PBKDF2 and encryption uses the installed cryptography package
 - Encryption state is checked during startup health checks
+## Tables
+All four main tables (Notes, Commands, Search Table view, Search Split view) support **sortable columns** — click any column header to sort ascending, click again to sort descending. Action columns (open, copy, delete) are not sortable and preserve their position.
 ## Import & Export
 - Export All creates a full data `.zip`
 - Export supports Notes, Commands, Targets, and Target Values in the supported file formats
@@ -125,7 +131,7 @@ Do not include local runtime or retired folders in the release asset:
 - Code snapshots: `Cores/Update/OldVersions/`
 ## Versioning
 - Visible app version, launcher version, updater version, and README version should stay aligned
-- This build is `5.1.0`
+- This build is `5.1.1`
 ## Links
 - Repository: https://github.com/emaldos/LOYA-Note
 - Issues: https://github.com/emaldos/LOYA-Note/issues

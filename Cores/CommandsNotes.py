@@ -265,7 +265,7 @@ class Widget(QWidget):
     command_saved=pyqtSignal()
     def __init__(self,parent=None):
         super().__init__(parent)
-        self._dbp=None;self._cmds=[];self._view=[];self._page=1;self._per=10
+        self._dbp=None;self._cmds=[];self._view=[];self._page=1;self._per=10;self._sort_col=-1;self._sort_asc=True
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.frame=QFrame(self);self.frame.setObjectName("CommandsNotesFrame");root.addWidget(self.frame,1)
         v=QVBoxLayout(self.frame);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
@@ -331,6 +331,7 @@ class Widget(QWidget):
         h.setSectionResizeMode(7,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(8,QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(6,56);self.table.setColumnWidth(7,44);self.table.setColumnWidth(8,44)
+        h.sectionClicked.connect(self._on_header_click)
         tw.addWidget(self.table,1)
         self.pager=QFrame(self.tbl_wrap);self.pager.setObjectName("CommandsPagerFrame")
         ph=QHBoxLayout(self.pager);ph.setContentsMargins(0,0,0,0);ph.setSpacing(10)
@@ -373,6 +374,31 @@ class Widget(QWidget):
     def open_command_editor(self,item):
         try:self._open_add(item)
         except Exception:pass
+    _CN_SORT_COLS={0,1,2,3,4,5}
+    _CN_HEADERS=["Note","Category","Sub","Tags","Command","Description","Inf","Edit","X"]
+    def _sort_key_cn(self,n,col):
+        if col==0:return _norm(n.get("title","") or n.get("note_name","")).lower()
+        if col==1:return _norm(n.get("category","")).lower()
+        if col==2:return _norm(n.get("sub","")).lower()
+        if col==3:return _norm(n.get("tags","")).lower()
+        if col==4:return _norm(n.get("command","")).lower()
+        if col==5:return _norm(n.get("description","")).lower()
+        return ""
+    def _do_sort(self):
+        if self._sort_col not in self._CN_SORT_COLS:return
+        self._view.sort(key=lambda n:self._sort_key_cn(n,self._sort_col),reverse=not self._sort_asc)
+    def _update_header_labels(self):
+        for c,lbl in enumerate(self._CN_HEADERS):
+            it=self.table.horizontalHeaderItem(c)
+            if it:it.setText(lbl+(" ▲" if self._sort_asc else " ▼") if c==self._sort_col else lbl)
+    def _on_header_click(self,col):
+        if col not in self._CN_SORT_COLS:return
+        if col==self._sort_col:self._sort_asc=not self._sort_asc
+        else:self._sort_col=col;self._sort_asc=True
+        self._do_sort()
+        self._update_header_labels()
+        self._page=1
+        self._render()
     def _apply(self):
         q=_norm(self.search.text()).lower()
         f=_norm(getattr(self,"_link_filter","All"))
@@ -386,6 +412,7 @@ class Widget(QWidget):
                 blob=" ".join([n.get("title",""),n.get("note_name",""),n.get("category",""),n.get("sub",""),n.get("tags",""),n.get("command",""),n.get("description","")]).lower()
                 if q in blob:out.append(n)
             self._view=out
+        self._do_sort()
         self._render()
     def _pages(self):
         n=len(self._view);per=max(1,int(self._per))

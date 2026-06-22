@@ -502,3 +502,11 @@ QToolButton#WindowControlBtn,QToolButton#WindowShrinkBtn,QToolButton#WindowClose
 QToolButton#WindowControlBtn:hover,QToolButton#WindowShrinkBtn:hover{background:#59152a46;border:1px solid #99c7ffff;color:#ffffff}
 QToolButton#WindowCloseBtn:hover{background:#7b1730;border:1px solid #ff8ab5;color:#ffffff}
 QSizeGrip#WindowSizeGrip{background:transparent;width:18px;height:18px}
+QProgressBar{background:#1b1b1b;border:1px solid #2b2b2b;border-radius:8px;color:#e7e7e7;text-align:center;min-height:14px;max-height:14px}
+QProgressBar::chunk{background:qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #1a4fd6,stop:1 #2e7bff);border-radius:7px}
+QCheckBox{color:#e7e7e7;background:transparent;spacing:6px}
+QCheckBox::indicator{width:16px;height:16px;border-radius:4px;border:1px solid #667fbfff;background:#1e1e1e}
+QCheckBox::indicator:hover{border:1px solid #99c7ffff;background:#262626}
+QCheckBox::indicator:checked{background:#2e7bff;border:1px solid #2e7bff}
+QCheckBox::indicator:checked:hover{background:#3a85ff;border:1px solid #3a85ff}
+QDialog#ProgressDialog{background:#141414;border:1px solid #4d78aaff;border-radius:16px}

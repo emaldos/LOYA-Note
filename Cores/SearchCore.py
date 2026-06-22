@@ -63,6 +63,7 @@ def _clean_cmd(s):
     raw=re.sub(r"\n\s+","\n",raw)
     raw=re.sub(r"\s+\n","\n",raw)
     return raw.strip()
+_PH_KEY_RE=re.compile(r'^[A-Za-z_][A-Za-z0-9_ ]*$')
 def _iter_placeholders(text):
     t=str(text or "")
     i=0;n=len(t)
@@ -76,7 +77,7 @@ def _iter_placeholders(text):
         if j>=n:break
         if not bad:
             raw=t[start+1:j].strip()
-            if raw:yield start,j+1,raw
+            if raw and _PH_KEY_RE.match(raw):yield start,j+1,raw
         i=j+1
 def _safe_mtime(p):
     try:return os.path.getmtime(p) if p and os.path.isfile(p) else None
@@ -326,7 +327,7 @@ class Table_Style(QWidget):
         super().__init__(parent)
         self._notes=[];self._view=[];self._q="";self._mode="Keyword";self._on_copy=on_copy;self._get_cmd=get_cmd
         self._src_filter="All";self._group_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
-        self._auto_cols=True;self._auto_limit=200
+        self._auto_cols=True;self._auto_limit=200;self._sort_col=-1;self._sort_asc=True
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.wrap=QFrame(self);self.wrap.setObjectName("HomeTableFrame");root.addWidget(self.wrap,1)
         v=QVBoxLayout(self.wrap);v.setContentsMargins(10,10,10,10);v.setSpacing(10)
@@ -357,6 +358,7 @@ class Table_Style(QWidget):
         h.setSectionResizeMode(self._c_cmd,QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(self._c_copy,QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(self._c_copy,44)
+        h.sectionClicked.connect(self._on_header_click)
         if hasattr(self.table,"setUniformRowHeights"):
             try:self.table.setUniformRowHeights(True)
             except Exception:pass
@@ -377,6 +379,29 @@ class Table_Style(QWidget):
         self._tag_filter=tag or "All"
         if apply:self._apply()
     def refresh_view(self):self._render()
+    _TS_SORT_COLS={0,1,2,3,4}
+    _TS_HEADERS=["Title","Category","Sub","Tags","Command","⧉"]
+    def _sort_key_ts(self,n,col):
+        if col==0:return _norm(n.get("title","")).lower()
+        if col==1:return _norm(n.get("category","")).lower()
+        if col==2:return _norm(n.get("sub","")).lower()
+        if col==3:return _norm(n.get("tags","")).lower()
+        if col==4:return _norm(n.get("command","")).lower()
+        return ""
+    def _do_sort(self):
+        if self._sort_col not in self._TS_SORT_COLS:return
+        self._view.sort(key=lambda n:self._sort_key_ts(n,self._sort_col),reverse=not self._sort_asc)
+    def _update_header_labels(self):
+        for c,lbl in enumerate(self._TS_HEADERS):
+            it=self.table.horizontalHeaderItem(c)
+            if it:it.setText(lbl+(" ▲" if self._sort_asc else " ▼") if c==self._sort_col else lbl)
+    def _on_header_click(self,col):
+        if col not in self._TS_SORT_COLS:return
+        if col==self._sort_col:self._sort_asc=not self._sort_asc
+        else:self._sort_col=col;self._sort_asc=True
+        self._do_sort()
+        self._update_header_labels()
+        self._render()
     def _update_header_mode(self,row_count):
         auto=row_count<=self._auto_limit
         if auto==self._auto_cols:return
@@ -427,6 +452,7 @@ class Table_Style(QWidget):
     def _apply(self):
         q=self._q;mode=self._mode
         self._view=[n for n in self._notes if self._match(n,q,mode)]
+        self._do_sort()
         self._render()
     def _row_note(self,row):
         try:
@@ -490,7 +516,7 @@ class Split_View_Style(QWidget):
         super().__init__(parent)
         self._notes=[];self._base=[];self._q="";self._mode="Keyword";self._on_copy=on_copy;self._get_cmd=get_cmd
         self._src_filter="All";self._group_filter="All";self._cat_filter="All";self._sub_filter="All";self._tag_filter="All"
-        self._auto_cols=True;self._auto_limit=200
+        self._auto_cols=True;self._auto_limit=200;self._sort_col=-1;self._sort_asc=True
         self._bar_cap=200
         root=QVBoxLayout(self);root.setContentsMargins(0,0,0,0);root.setSpacing(0)
         self.splitter=QSplitter(Qt.Orientation.Horizontal,self);self.splitter.setChildrenCollapsible(False);root.addWidget(self.splitter,1)
@@ -531,6 +557,7 @@ class Split_View_Style(QWidget):
         h.setSectionResizeMode(self._c_cmd,QHeaderView.ResizeMode.Stretch)
         h.setSectionResizeMode(self._c_copy,QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(self._c_copy,44)
+        h.sectionClicked.connect(self._on_header_click)
         if hasattr(self.table,"setUniformRowHeights"):
             try:self.table.setUniformRowHeights(True)
             except Exception:pass
@@ -692,8 +719,27 @@ class Split_View_Style(QWidget):
             a5=QAction("Copy Note ID",self);a5.triggered.connect(lambda:(QApplication.clipboard().setText(str(n.get("note_id"))),_log("[+]",f"Copied note id: {n.get('note_id')}")))
             m.addAction(a5)
         m.exec(self.table.viewport().mapToGlobal(pos))
+    _SV_SORT_COLS={0,1,2}
+    _SV_HEADERS=["Title","Tags","Command","⧉"]
+    def _sort_key_sv(self,n,col):
+        if col==0:return _norm(n.get("title","")).lower()
+        if col==1:return _norm(n.get("tags","")).lower()
+        if col==2:return _norm(n.get("command","")).lower()
+        return ""
+    def _update_header_labels(self):
+        for c,lbl in enumerate(self._SV_HEADERS):
+            it=self.table.horizontalHeaderItem(c)
+            if it:it.setText(lbl+(" ▲" if self._sort_asc else " ▼") if c==self._sort_col else lbl)
+    def _on_header_click(self,col):
+        if col not in self._SV_SORT_COLS:return
+        if col==self._sort_col:self._sort_asc=not self._sort_asc
+        else:self._sort_col=col;self._sort_asc=True
+        self._update_header_labels()
+        self._render()
     def _render(self):
         rows=self._filtered()
+        if self._sort_col in self._SV_SORT_COLS and rows:
+            rows=sorted(rows,key=lambda n:self._sort_key_sv(n,self._sort_col),reverse=not self._sort_asc)
         self._update_header_mode(len(rows))
         self.table.setUpdatesEnabled(False)
         try:

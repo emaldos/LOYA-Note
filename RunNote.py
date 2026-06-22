@@ -1,4 +1,4 @@
-import os,sys,json,subprocess,threading,time,re
+import os,sys,json,subprocess,threading,time,re,datetime,shutil
 from pathlib import Path
 try:
     from Cores.Update import APP_NAME as _UPDATE_APP_NAME
@@ -9,7 +9,7 @@ try:
     from Cores.Update import sync_installed_version as _sync_installed_version
 except Exception:
     _UPDATE_APP_NAME="LOYA Note"
-    _DEFAULT_APP_VERSION="5.1.0"
+    _DEFAULT_APP_VERSION="5.1.1"
     _recovery=None
     def _get_app_version():
         return _DEFAULT_APP_VERSION
@@ -19,6 +19,35 @@ except Exception:
         return {}
 def _abs(*p):
     return str(Path(__file__).resolve().parent.joinpath(*p))
+_LOG_FILE=None
+def _init_log(keep_days=7):
+    global _LOG_FILE
+    try:
+        log_dir=_abs("Logs")
+        os.makedirs(log_dir,exist_ok=True)
+        date=datetime.datetime.now().strftime("%Y-%m-%d")
+        _LOG_FILE=os.path.join(log_dir,f"RunNote_{date}.log")
+        cutoff=datetime.datetime.now()-datetime.timedelta(days=keep_days)
+        for name in os.listdir(log_dir):
+            if not (name.startswith("RunNote_") and name.endswith(".log")):
+                continue
+            try:
+                fd=datetime.datetime.strptime(name[8:-4],"%Y-%m-%d")
+                if fd<cutoff:
+                    os.remove(os.path.join(log_dir,name))
+            except Exception:
+                pass
+    except Exception:
+        _LOG_FILE=None
+def _log(msg,level="INFO"):
+    if not _LOG_FILE:
+        return
+    try:
+        ts=datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        with open(_LOG_FILE,"a",encoding="utf-8") as f:
+            f.write(f"[{ts}] [{level}] {msg}\n")
+    except Exception:
+        pass
 def _is_win():
     return os.name=="nt"
 def _console_python():
@@ -39,12 +68,14 @@ def _restart_self():
     except Exception as e:
         return False,str(e)
 def _parse_args(argv):
-    out={"force_recovery":False,"recovery_reason":""}
+    out={"force_recovery":False,"recovery_reason":"","skip_update":False}
     i=0
     while i<len(argv):
         arg=str(argv[i] or "").strip()
         if arg=="--recovery":
             out["force_recovery"]=True
+        elif arg=="--skip-update":
+            out["skip_update"]=True
         elif arg=="--reason" and i+1<len(argv):
             i+=1;out["recovery_reason"]=str(argv[i] or "").strip()
         i+=1
@@ -218,6 +249,7 @@ class _Spinner:
         sys.stdout.flush()
 def _run(cmd,spinner_msg=None,env=None,cwd=None):
     sp=_Spinner()
+    t0=time.time()
     if spinner_msg:
         sp.start(spinner_msg)
     p=subprocess.Popen(cmd,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,env=env,cwd=cwd)
@@ -230,7 +262,7 @@ def _run(cmd,spinner_msg=None,env=None,cwd=None):
         pass
     rc=p.wait()
     if spinner_msg:
-        sp.stop(rc==0,tail="")
+        sp.stop(rc==0,tail=f"({time.time()-t0:.1f}s)")
     return rc,"\n".join(out[-30:])
 def _venv_paths(venv_dir):
     if _is_win():
@@ -254,18 +286,70 @@ def _ensure_venv(venv_dir):
         return True,""
     rc,tail=_run([sys.executable,"-m","venv",venv_dir],f"Creating venv ({os.path.basename(venv_dir)})")
     if rc!=0:
+        shutil.rmtree(venv_dir,ignore_errors=True)
         return False,tail
     _make_hidden_windows(venv_dir)
     return True,""
+def _pip_trusted_host_args():
+    return ["--trusted-host","pypi.org","--trusted-host","files.pythonhosted.org","--trusted-host","pypi.python.org"]
+def _pip_is_functional(py):
+    rc,_=_run([py,"-m","pip","--version"],None)
+    return rc==0
+def _is_ssl_error(text):
+    return any(k in text for k in ("SSLError","CERTIFICATE_VERIFY_FAILED","ssl.SSLError"))
 def _ensure_pip(py):
     rc,tail=_run([py,"-m","pip","install","-U","pip"],"Updating pip")
-    return rc==0,tail
+    if rc==0:
+        return True,tail
+    if _is_ssl_error(tail):
+        rc2,tail2=_run([py,"-m","pip","install","-U","pip"]+_pip_trusted_host_args(),"Updating pip (trusted hosts)")
+        if rc2==0:
+            return True,tail2
+        if _pip_is_functional(py):
+            _log("pip upgrade failed due to SSL/certificate issue in certificate chain; existing pip will be used\n"+tail2,"WARN")
+            print("WARNING: pip upgrade skipped (SSL certificate issue); existing pip will be used")
+            return True,""
+        _log("pip upgrade failed (SSL); pip also not functional\n"+tail2,"ERROR")
+        return False,tail2
+    _log("pip upgrade failed\n"+tail,"ERROR")
+    return False,tail
 def _ensure_deps(py,reqs):
     if not reqs:
         return True,""
     cmd=[py,"-m","pip","install","--upgrade","--upgrade-strategy","only-if-needed"]+reqs
     rc,tail=_run(cmd,"Installing/Updating requirements")
-    return rc==0,tail
+    if rc==0:
+        return True,tail
+    if _is_ssl_error(tail):
+        rc2,tail2=_run(cmd+_pip_trusted_host_args(),"Installing/Updating requirements (trusted hosts)")
+        if rc2==0:
+            return True,tail2
+        _log("deps install failed (SSL trusted-host fallback)\n"+tail2,"ERROR")
+        return False,tail2
+    _log("deps install failed\n"+tail,"ERROR")
+    return False,tail
+def _deps_fingerprint(reqs):
+    import hashlib
+    return hashlib.sha256("|".join(sorted(reqs)).encode()).hexdigest()[:16]
+def _load_deps_state():
+    path=_abs("Data","deps_state.json")
+    try:
+        with open(path,"r",encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+def _save_deps_state(reqs):
+    path=_abs("Data","deps_state.json")
+    try:
+        os.makedirs(os.path.dirname(path),exist_ok=True)
+        with open(path,"w",encoding="utf-8") as f:
+            json.dump({"fingerprint":_deps_fingerprint(reqs),"ts":datetime.datetime.now().isoformat()},f)
+    except Exception:
+        pass
+def _deps_up_to_date(reqs):
+    if not reqs:
+        return True
+    return _load_deps_state().get("fingerprint")==_deps_fingerprint(reqs)
 def _check_pyqt_runtime(py):
     code=(
         "import sys,traceback\n"
@@ -319,19 +403,55 @@ def _launch_app(py,pyw,app_path):
     else:
         p=subprocess.Popen([py,app_path],stdin=stdin,stdout=stdout,stderr=stderr,start_new_session=True,cwd=os.path.dirname(app_path))
     return True,"",int(getattr(p,"pid",0) or 0)
+def _pid_alive(pid):
+    try:
+        os.kill(pid,0)
+        return True
+    except PermissionError:
+        return True
+    except OSError:
+        return False
+def _read_pid_file():
+    path=_abs("Data","loya.pid")
+    try:
+        with open(path,"r",encoding="utf-8") as f:
+            return int(f.read().strip())
+    except Exception:
+        return None
+def _write_pid_file(pid):
+    path=_abs("Data","loya.pid")
+    try:
+        os.makedirs(os.path.dirname(path),exist_ok=True)
+        with open(path,"w",encoding="utf-8") as f:
+            f.write(str(pid))
+    except Exception:
+        pass
+def _check_already_running():
+    pid=_read_pid_file()
+    if pid is None:
+        return False,0
+    alive=_pid_alive(pid)
+    return alive,pid
 def main():
     args=_parse_args(sys.argv[1:])
+    skip_update=bool(args.get("skip_update"))
     app_version=_get_app_version()
     try:
         _ensure_update_runtime(app_version)
         _sync_installed_version(app_version)
     except Exception as exc:
         print(f"WARNING: updater runtime init failed ({exc})")
+    _init_log()
+    _log(f"{_UPDATE_APP_NAME} v{app_version} starting (Python {sys.version.split()[0]})")
+    if skip_update:
+        _log("--skip-update flag active; pip/deps steps will be skipped")
     print(f"{_UPDATE_APP_NAME} v{app_version}")
     req_path=_abs("Requirements.json")
     py_req,reqs=_read_requirements(req_path)
     if not _py_ok(py_req):
-        print(f"ERROR: Python version not supported. Required: {py_req} | Current: {sys.version.split()[0]}")
+        msg=f"Python version not supported. Required: {py_req} | Current: {sys.version.split()[0]}"
+        _log(msg,"ERROR")
+        print(f"ERROR: {msg}")
         return 2
     force_recovery=bool(args.get("force_recovery"))
     recovery_reason=str(args.get("recovery_reason","") or "")
@@ -339,13 +459,16 @@ def main():
         ok,msg,notice,report=_bootstrap_startup_state()
         rec=_run_recovery(force=force_recovery,reason=(recovery_reason or msg),report=report)
         if rec.get("error"):
+            _log(str(rec.get("error")),"WARN")
             print("WARNING: "+str(rec.get("error")))
         act=str(rec.get("action","continue") or "continue").strip().lower()
         if act=="restart":
             rok,rmsg=_restart_self()
+            _log(f"Restart: {rmsg}","INFO" if rok else "ERROR")
             print(rmsg if rok else "ERROR: "+rmsg)
             return 0 if rok else 10
         if act=="exit":
+            _log("Exit requested by recovery","INFO")
             return 10
         if rec.get("shown"):
             force_recovery=False;recovery_reason=""
@@ -354,49 +477,93 @@ def main():
         if ok:
             if notice:print(notice)
             break
+        _log(f"Startup state validation failed: {msg}","ERROR")
         print("ERROR: Startup state validation failed")
         print(msg)
         return 2
     ok,msg=_check_platform_prereqs()
     if not ok:
+        _log(f"Platform prerequisites failed: {msg}","ERROR")
         print("ERROR: Platform prerequisites failed")
         print(msg)
         return 2
+    running,old_pid=_check_already_running()
+    if running:
+        _log(f"Already running (PID: {old_pid})","WARN")
+        print(f"WARNING: LOYA Note is already running (PID: {old_pid})")
+        return 0
     venv_dir=_abs(".venv_windows" if _is_win() else ".venv_linux")
-    ok,tail=_ensure_venv(venv_dir)
-    if not ok:
-        print("ERROR: Failed to create venv")
-        print(tail)
-        return 3
+    _py_check=os.path.join(venv_dir,"Scripts","python.exe") if _is_win() else os.path.join(venv_dir,"bin","python3")
+    if os.path.isdir(venv_dir) and os.path.isfile(_py_check):
+        sys.stdout.write("[OK] Venv ready (cached)\n");sys.stdout.flush()
+        _log("Venv already exists")
+    else:
+        if os.path.isdir(venv_dir):
+            sys.stdout.write("[..] Incomplete venv detected, removing and recreating...\n");sys.stdout.flush()
+            _log("Removing incomplete venv before recreate")
+            shutil.rmtree(venv_dir,ignore_errors=True)
+        ok,tail=_ensure_venv(venv_dir)
+        if not ok:
+            _log(f"Failed to create venv: {tail}","ERROR")
+            print("ERROR: Failed to create venv")
+            print(tail)
+            if not _is_win():
+                pkg="python3-venv"
+                m=re.search(r"apt install (\S+)",tail or "")
+                if m:pkg=m.group(1)
+                print(f"\nHint: Run:  sudo apt install {pkg} python3-pip")
+            return 3
     py,pyw,pip=_venv_paths(venv_dir)
     if not os.path.isfile(py):
-        print("ERROR: venv python not found")
+        _log("venv python not found after creation","ERROR")
+        print("ERROR: venv python not found — venv may be corrupted, delete it and re-run")
         return 4
-    ok,tail=_ensure_pip(py)
-    if not ok:
-        print("ERROR: Failed to update pip")
-        print(tail)
-        return 5
-    ok,tail=_ensure_deps(py,reqs)
-    if not ok:
-        print("ERROR: Failed to install requirements")
-        print(tail)
-        return 6
+    if skip_update:
+        sys.stdout.write("[OK] Skipping pip/deps update (--skip-update)\n");sys.stdout.flush()
+        _log("pip/deps update skipped via --skip-update")
+    else:
+        t0=time.time()
+        ok,tail=_ensure_pip(py)
+        if not ok:
+            _log(f"Failed to update pip ({time.time()-t0:.1f}s): {tail}","ERROR")
+            print("ERROR: Failed to update pip")
+            print(tail)
+            return 5
+        _log(f"pip ready ({time.time()-t0:.1f}s)")
+        if _deps_up_to_date(reqs):
+            sys.stdout.write("[OK] Requirements up to date (cached)\n");sys.stdout.flush()
+            _log("Deps fingerprint matches; skipping pip install")
+        else:
+            t0=time.time()
+            ok,tail=_ensure_deps(py,reqs)
+            if not ok:
+                _log(f"Failed to install requirements ({time.time()-t0:.1f}s): {tail}","ERROR")
+                print("ERROR: Failed to install requirements")
+                print(tail)
+                return 6
+            _save_deps_state(reqs)
+            _log(f"Deps installed ({time.time()-t0:.1f}s)")
+    t0=time.time()
     ok,tail=_check_pyqt_runtime(py)
     if not ok:
+        _log(f"PyQt6 runtime check failed ({time.time()-t0:.1f}s): {tail}","ERROR")
         print("ERROR: PyQt6 runtime check failed")
         msg=_pyqt_runtime_help(tail)
         if msg:
             print(msg)
         return 7
+    _log(f"PyQt6 verified ({time.time()-t0:.1f}s)")
     app=_abs("LOYA_Note.py")
     sp=_Spinner()
     sp.start("Launching LOYA Note")
     ok,msg,pid=_launch_app(py,pyw,app)
     sp.stop(ok)
     if not ok:
+        _log(f"Launch failed: {msg}","ERROR")
         print(f"ERROR: {msg}")
         return 7
+    _write_pid_file(pid)
+    _log(f"Launched successfully (PID: {pid})","INFO")
     print(f"OK: Running in background (PID: {pid})")
     return 0
 if __name__=="__main__":

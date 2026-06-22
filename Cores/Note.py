@@ -1008,6 +1008,7 @@ class _ColorSpectrum(QWidget):
 class _ColorPickerDlg(QDialog):
     def __init__(self,parent,title,initial="#ffffff"):
         super().__init__(parent)
+        self.setWindowFlags(Qt.WindowType.Dialog|Qt.WindowType.WindowCloseButtonHint)
         self.setObjectName("NoteAddDialog")
         self.setWindowTitle(title)
         self._syncing=False
@@ -3928,9 +3929,23 @@ class Widget(QWidget):
         d=self._load_draft_recovery_payload()
         if not d:return
         w=self.window() if self.window() else self
-        res=QMessageBox.question(w,"Recover Draft","Recover unsaved changes?",QMessageBox.StandardButton.Yes|QMessageBox.StandardButton.No)
-        if res==QMessageBox.StandardButton.Yes:
+        msg=QMessageBox(w)
+        msg.setWindowTitle("Recover Draft")
+        msg.setText("You have unsaved changes from a previous session.")
+        msg.setInformativeText("Click 'Edit Draft' to open and complete it (you can add a missing name before saving), 'Discard' to delete it, or 'Cancel' to decide later.")
+        msg.setIcon(QMessageBox.Icon.Question)
+        edit_btn=msg.addButton("Edit Draft",QMessageBox.ButtonRole.AcceptRole)
+        discard_btn=msg.addButton("Discard",QMessageBox.ButtonRole.DestructiveRole)
+        msg.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
+        msg.setDefaultButton(edit_btn)
+        msg.exec()
+        clicked=msg.clickedButton()
+        if clicked==edit_btn:
             if self._apply_draft_recovery(d):return
+        elif clicked==discard_btn:
+            pass
+        else:
+            return
         self._clear_draft_recovery()
     def _mark_dirty(self,*a):
         self._dirty=True
@@ -4110,11 +4125,13 @@ class Widget(QWidget):
             self.highlight_line.setGeometry(8,34,26,3);self.highlight_line.setStyleSheet(f"QFrame#FmtHighlightLine{{background:{color};border:0;border-radius:2px;}}");self.highlight_line.raise_()
         except Exception:pass
     def _pick_text_color(self):
-        dlg=_ColorPickerDlg(self,"Text Color",self._current_text_color or _note_text_color())
+        p=getattr(self,"_create_dialog",None) or (self.window() or self)
+        dlg=_ColorPickerDlg(p,"Text Color",self._current_text_color or _note_text_color())
         if dlg.exec()!=QDialog.DialogCode.Accepted:return
         self._set_text_color(dlg.color())
     def _pick_highlight_color(self):
-        dlg=_ColorPickerDlg(self,"Highlight",self._current_highlight_color or _note_highlight_color())
+        p=getattr(self,"_create_dialog",None) or (self.window() or self)
+        dlg=_ColorPickerDlg(p,"Highlight",self._current_highlight_color or _note_highlight_color())
         if dlg.exec()!=QDialog.DialogCode.Accepted:return
         self._set_highlight_color(dlg.color())
     def _set_note_ref_color(self,hexv):
@@ -5329,7 +5346,7 @@ class Widget(QWidget):
             name=_norm(self.in_name.text())
             group_name=_norm(self.in_group.text())
             if not name:
-                w=self.window() if self.window() else self
+                w=getattr(self,"_create_dialog",None) or (self.window() if self.window() else self)
                 QMessageBox.warning(w,"Missing","Note Name is required.")
                 return False
             try:self.edit.normalize_note_links(lambda ref:_note_refs.resolve_note_ref(self._dbp,ref))
@@ -5343,7 +5360,7 @@ class Widget(QWidget):
             if not cmds:
                 cmds=_parse_cmd_blocks(plain)
             if not _norm(plain) and not cmds:
-                w=self.window() if self.window() else self
+                w=getattr(self,"_create_dialog",None) or (self.window() if self.window() else self)
                 QMessageBox.warning(w,"Missing","Note area is empty.")
                 return False
             sig=self._current_note_sig(name,htmls,group_name)
@@ -5409,7 +5426,7 @@ class Widget(QWidget):
             return True
         except Exception as e:
             _log("[!]",f"Save failed ({e})")
-            w=self.window() if self.window() else self
+            w=getattr(self,"_create_dialog",None) or (self.window() if self.window() else self)
             QMessageBox.critical(w,"Error","Failed to save note.")
             return False
         finally:

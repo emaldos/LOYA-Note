@@ -971,8 +971,14 @@ def _short_mid(text,max_len=96):
     if max_len<12:return s[:max_len]
     head=max(4,(max_len-5)//2);tail=max(4,max_len-5-head)
     return s[:head]+" ... "+s[-tail:]
+def _apply_theme(w):
+    try:
+        app=QApplication.instance()
+        if app and app.styleSheet():w.setStyleSheet(app.styleSheet())
+    except Exception:pass
 def _progress(owner,title,subtitle):
     d=QDialog(owner);d.setObjectName("ProgressDialog");d.setWindowTitle(title);d.setModal(True);d.resize(520,140)
+    _apply_theme(d)
     v=QVBoxLayout(d);v.setContentsMargins(14,14,14,14);v.setSpacing(10)
     t=QLabel(subtitle,d);t.setObjectName("PageTitle");v.addWidget(t,0)
     s=QLabel("",d);s.setObjectName("PageSubTitle");v.addWidget(s,0)
@@ -2534,7 +2540,7 @@ class _UpdatePage(QWidget):
         check=self._check_state_ready()
         if not check:return
         cur=_norm(check.get("current_version",""));latest=_norm(check.get("last_available_version",""))
-        mb=QMessageBox(self);mb.setWindowTitle("Apply Update");mb.setText(f"Apply authenticated update from {cur or '?'} to {latest or '?'}?\n\nLOYA will create data and code backups, close the main window, apply the package from the official repository, and relaunch through RunNote.py.")
+        mb=QMessageBox(self);_apply_theme(mb);mb.setWindowTitle("Apply Update");mb.setText(f"Apply authenticated update from {cur or '?'} to {latest or '?'}?\n\nLOYA will create data and code backups, close the main window, apply the package from the official repository, and relaunch through RunNote.py.")
         bok=mb.addButton("Apply Update",QMessageBox.ButtonRole.AcceptRole)
         mb.addButton("Cancel",QMessageBox.ButtonRole.RejectRole)
         mb.exec()
@@ -2552,14 +2558,16 @@ class _UpdatePage(QWidget):
         if not out.get("ok"):
             msg="Update start failed: "+_norm(out.get("error","Unknown error"))
             self._set_footer(msg);_log("[!]",msg)
-            try:QMessageBox.warning(self,"Update Failed",msg)
+            try:
+                mb=QMessageBox(self);_apply_theme(mb);mb.setWindowTitle("Update Failed");mb.setText(msg);mb.setIcon(QMessageBox.Icon.Warning);mb.exec()
             except Exception:pass
             return
         backups=out.get("backups",{}) if isinstance(out.get("backups",{}),dict) else {}
         msg="The authenticated package is ready. LOYA will close now, apply the update out of process, and relaunch through RunNote.py."
         self._set_footer(msg)
         _log("[+]",f"Update handoff ready target={out.get('manifest',{}).get('version','')} helper_pid={out.get('helper_pid',0)} data={backups.get('data_backup','')} code={backups.get('code_snapshot','')}")
-        try:QMessageBox.information(self,"Applying Update",msg+f"\n\nData backup:\n{backups.get('data_backup','')}\n\nCode snapshot:\n{backups.get('code_snapshot','')}")
+        try:
+            mb=QMessageBox(self);_apply_theme(mb);mb.setWindowTitle("Applying Update");mb.setText(msg+f"\n\nData backup:\n{backups.get('data_backup','')}\n\nCode snapshot:\n{backups.get('code_snapshot','')}");mb.setIcon(QMessageBox.Icon.Information);mb.exec()
         except Exception:pass
         app=QApplication.instance()
         if app is not None:QTimer.singleShot(150,app.quit)

@@ -130,6 +130,8 @@ class Widget(QWidget):
         h.setSectionResizeMode(3,QHeaderView.ResizeMode.Fixed)
         h.setSectionResizeMode(4,QHeaderView.ResizeMode.Fixed)
         self.table.setColumnWidth(3,44);self.table.setColumnWidth(4,44)
+        self._sort_col=-1;self._sort_asc=True
+        h.sectionClicked.connect(self._on_header_click)
         tw.addWidget(self.table,1)
         self.pager=QFrame(self.tbl_wrap);self.pager.setObjectName("NoteAddPagerFrame")
         ph=QHBoxLayout(self.pager);ph.setContentsMargins(0,0,0,0);ph.setSpacing(10)
@@ -161,6 +163,29 @@ class Widget(QWidget):
         q=_norm(self.search.text()).lower()
         if not q:self._view=list(self._notes)
         else:self._view=[n for n in self._notes if q in (n.get("note_name","").lower())]
+        self._do_sort()
+        self._render()
+    _NA_SORT_COLS={0,1,2}
+    _NA_HEADERS=["Note Name","Date Created","Updated","#","X"]
+    def _sort_key_na(self,n,col):
+        if col==0:return _norm(n.get("note_name","")).lower()
+        if col==1:return n.get("created_at","") or ""
+        if col==2:return n.get("updated_at","") or n.get("created_at","") or ""
+        return ""
+    def _do_sort(self):
+        if self._sort_col not in self._NA_SORT_COLS:return
+        self._view.sort(key=lambda n:self._sort_key_na(n,self._sort_col),reverse=not self._sort_asc)
+    def _update_header_labels(self):
+        for c,lbl in enumerate(self._NA_HEADERS):
+            it=self.table.horizontalHeaderItem(c)
+            if it:it.setText(lbl+(" ▲" if self._sort_asc else " ▼") if c==self._sort_col else lbl)
+    def _on_header_click(self,col):
+        if col not in self._NA_SORT_COLS:return
+        if col==self._sort_col:self._sort_asc=not self._sort_asc
+        else:self._sort_col=col;self._sort_asc=True
+        self._do_sort()
+        self._update_header_labels()
+        self._page=1
         self._render()
     def _pages(self):
         n=len(self._view);per=max(1,int(self._per))
